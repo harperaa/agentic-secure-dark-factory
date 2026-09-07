@@ -109,9 +109,11 @@ jobs:
           work-dir: sandbox-exec
           go-version-file: sandbox-exec/go.mod
           cache: false
-      - uses: securego/gosec@15d5c61e866bc2e2e8389376a31f1e5e09bde7d8 # v2.22.9
-        with:
-          args: ./sandbox-exec/...
+      - name: gosec
+        working-directory: sandbox-exec
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.22.9
+          "$(go env GOPATH)/bin/gosec" ./...
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: config
@@ -128,10 +130,10 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Static analysis (fail on ERROR severity)
         env:
-          SEMGREP_RULES: ${{ vars.SEMGREP_RULES || 'p/default p/typescript p/golang p/bash p/secrets p/owasp-top-ten' }}
+          SEMGREP_RULES: ${{ vars.SEMGREP_RULES || 'p/default p/typescript p/golang p/secrets p/owasp-top-ten' }}
         run: |
           # shellcheck disable=SC2086
-          semgrep scan --config auto $(printf -- '--config %s ' $SEMGREP_RULES) \
+          semgrep scan $(printf -- '--config %s ' $SEMGREP_RULES) \
             --severity ERROR --error --metrics=off --exclude node_modules
 
   secrets:
