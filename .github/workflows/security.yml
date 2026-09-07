@@ -112,7 +112,7 @@ jobs:
       - name: gosec
         working-directory: sandbox-exec
         run: |
-          go install github.com/securego/gosec/v2/cmd/gosec@v2.22.9
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
           "$(go env GOPATH)/bin/gosec" ./...
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
