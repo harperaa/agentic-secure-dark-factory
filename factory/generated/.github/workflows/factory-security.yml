@@ -30,7 +30,7 @@ jobs:
           SEMGREP_RULES: ${{ vars.SEMGREP_RULES || 'p/default p/typescript p/nextjs p/secrets p/owasp-top-ten' }}
         run: |
           # shellcheck disable=SC2086
-          semgrep scan --config auto $(printf -- '--config %s ' $SEMGREP_RULES) \
+          semgrep scan $(printf -- '--config %s ' $SEMGREP_RULES) \
             --severity ERROR --error --metrics=off --exclude node_modules --exclude .next \
             --exclude security_context --exclude security_reports --exclude threat_modeling_output
 

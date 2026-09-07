@@ -30,7 +30,10 @@ func (l Local) Run(ctx context.Context, spec Spec) (int, error) {
 	if len(spec.Command) == 0 {
 		return ExitCodeUnavailable, errors.New("local: empty command")
 	}
-	cmd := exec.Command(spec.Command[0], spec.Command[1:]...)
+	// The command is the executor array the operator wrote in worker.toml, never run input,
+	// so the non-static exec is the whole purpose of this binary.
+	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
+	cmd := exec.Command(spec.Command[0], spec.Command[1:]...) // #nosec G204 -- operator-configured executor
 	cmd.Dir = spec.WorkDir
 	cmd.Env = append(os.Environ(), spec.Env...)
 	cmd.Stdin = spec.Stdin

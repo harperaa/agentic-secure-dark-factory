@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
 
-require_cmd curl envsubst
+require_cmd curl envsubst git
 require_env FACTORY_ROOT FACTORY_WORKSPACE MACHINIST_HOME MACHINIST_URL MACHINIST_LISTEN \
   MACHINIST_TOKEN_FILE MACHINIST_VERSION MACHINIST_WORKER_NAME MACHINIST_MAX_CONCURRENT_JOBS \
   MACHINIST_REQUEST_LABEL SANDBOX_BACKEND SANDBOX_SNAPSHOT
@@ -16,7 +16,19 @@ require_env FACTORY_ROOT FACTORY_WORKSPACE MACHINIST_HOME MACHINIST_URL MACHINIS
 home=$(expand_tilde "$MACHINIST_HOME")
 token_file=$(expand_tilde "$MACHINIST_TOKEN_FILE")
 workspace=$(expand_tilde "$FACTORY_WORKSPACE")
-mkdir -p "$home/server" "$home/worker" "$home/prompts" "$(dirname "$token_file")"
+mkdir -p "$home/server" "$home/worker" "$home/prompts" "$(dirname "$token_file")" "$workspace"
+
+# Machinist only runs commands inside a Git worktree, so the workspace that genesis runs in
+# is itself a (content-free) repository; products are cloned beneath it and ignored.
+if [ ! -d "$workspace/.git" ]; then
+  git -C "$workspace" init -q -b main
+  printf '*\n!.gitignore\n' > "$workspace/.gitignore"
+  git -C "$workspace" add .gitignore
+  git -C "$workspace" -c user.name=factory -c user.email=factory@localhost commit -q -m "chore: factory workspace"
+  log INSTALL workspace passed path="$workspace"
+else
+  log INSTALL workspace skipped
+fi
 export MACHINIST_HOME="$home" MACHINIST_TOKEN_FILE="$token_file" FACTORY_WORKSPACE="$workspace"
 
 vars='$FACTORY_ROOT $FACTORY_WORKSPACE $MACHINIST_HOME $MACHINIST_URL $MACHINIST_LISTEN $MACHINIST_TOKEN_FILE $MACHINIST_WORKER_NAME $MACHINIST_MAX_CONCURRENT_JOBS $MACHINIST_REQUEST_LABEL $SANDBOX_BACKEND $SANDBOX_SNAPSHOT'

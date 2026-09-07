@@ -57,11 +57,13 @@ spec_get() {
 
 # expand_tilde PATH — resolve a leading ~ so paths from factory.env work in non-login shells.
 expand_tilde() {
-  case "$1" in
-    "~") printf '%s' "$HOME" ;;
-    "~/"*) printf '%s/%s' "$HOME" "${1#\~/}" ;;
-    *) printf '%s' "$1" ;;
-  esac
+  if [ "$1" = "~" ]; then
+    printf '%s' "$HOME"
+  elif [ "${1#\~/}" != "$1" ]; then
+    printf '%s/%s' "$HOME" "${1#\~/}"
+  else
+    printf '%s' "$1"
+  fi
 }
 
 # json_field JSON KEY — read a top-level key from JSON emitted by SVCOS scripts.
