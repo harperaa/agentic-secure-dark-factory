@@ -1,0 +1,162 @@
+# The factory's own security CI (design §13.4): the same controls it imposes on products.
+# Required contexts on main: lint, test, security, semgrep, secrets, build, guard.
+name: security
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: sandbox-exec/go.mod
+          cache: false
+      - name: gofmt and go vet
+        working-directory: sandbox-exec
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+          go vet ./...
+      - uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38 # 2.0.0
+        with:
+          scandir: ./factory/scripts
+          additional_files: snapshots/build.sh
+          severity: warning
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version-file: control-plane/package.json
+          cache: npm
+          cache-dependency-path: control-plane/package-lock.json
+      - name: Type-check control plane
+        working-directory: control-plane
+        run: |
+          npm ci --no-audit --no-fund
+          npx tsc --noEmit
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: sandbox-exec/go.mod
+          cache: false
+      - name: sandbox-exec tests
+        working-directory: sandbox-exec
+        run: go test ./...
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version-file: control-plane/package.json
+          cache: npm
+          cache-dependency-path: control-plane/package-lock.json
+      - name: Policy tests and spec validation
+        working-directory: control-plane
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+          node scripts/validate-spec.mjs ../spec/factory-spec.schema.json ../spec/examples/*.json
+
+  guard:
+    name: guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: No interactive prompts on the factory path (design R12)
+        run: factory/scripts/check-no-askuserquestion.sh
+      - name: Every GitHub Action is pinned by commit SHA
+        run: |
+          if grep -rhoE '^\s*-\s*uses: [^@]+@[^ ]+' .github/workflows factory/generated/.github/workflows \
+              | grep -vE '@[0-9a-f]{40}( |$)'; then
+            echo "unpinned action found"; exit 1
+          fi
+
+  security:
+    name: security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version-file: control-plane/package.json
+          cache: npm
+          cache-dependency-path: control-plane/package-lock.json
+      - name: npm audit and lockfile consistency
+        working-directory: control-plane
+        run: |
+          npm ci --no-audit --no-fund
+          npm audit --audit-level=high
+          npm ls --all >/dev/null
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: sandbox-exec/go.mod
+          cache: false
+      - uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1
+        with:
+          work-dir: sandbox-exec
+          go-version-file: sandbox-exec/go.mod
+          cache: false
+      - uses: securego/gosec@15d5c61e866bc2e2e8389376a31f1e5e09bde7d8 # v2.22.9
+        with:
+          args: ./sandbox-exec/...
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+
+  semgrep:
+    name: semgrep
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep:1.176.0
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Static analysis (fail on ERROR severity)
+        env:
+          SEMGREP_RULES: ${{ vars.SEMGREP_RULES || 'p/default p/typescript p/golang p/bash p/secrets p/owasp-top-ten' }}
+        run: |
+          # shellcheck disable=SC2086
+          semgrep scan --config auto $(printf -- '--config %s ' $SEMGREP_RULES) \
+            --severity ERROR --error --metrics=off --exclude node_modules
+
+  secrets:
+    name: secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - run: pip install --disable-pip-version-check detect-secrets==1.5.0
+      - name: Scan tracked files against the baseline
+        run: git ls-files -z | xargs -0 detect-secrets-hook --baseline .secrets.baseline
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: sandbox-exec/go.mod
+          cache: false
+      - name: Build sandbox-exec
+        working-directory: sandbox-exec
+        run: CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/sandbox-exec ./cmd/sandbox-exec
+      - name: Validate the snapshot Dockerfile builds its metadata stage
+        run: docker build --check --build-arg NODE_VERSION=24 --build-arg DEBIAN_RELEASE=bookworm snapshots

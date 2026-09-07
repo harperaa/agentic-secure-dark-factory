@@ -1,0 +1,55 @@
+# Machinist control-plane configuration for the Agentic Secure Dark Factory.
+# Rendered by factory/scripts/install-machinist-config.sh from factory.env; do not edit the output by hand.
+# Executors and repositories are machine-local and live in worker.toml.
+
+[server]
+listen = "${MACHINIST_LISTEN}"
+database = "${MACHINIST_HOME}/server/machinist.db"
+worker_token_file = "${MACHINIST_TOKEN_FILE}"
+max_concurrent_jobs = ${MACHINIST_MAX_CONCURRENT_JOBS}
+
+# --- Stage commands (design §4.4). One stage = one job = one run. ---------------------------
+
+# GENESIS: spec JSON is the prompt; the script reads it from stdin.
+[commands.genesis]
+executor = "genesis-script"
+timeout = "45m"
+
+# BUILD[i] and FIX: Machinist's foreman, verbatim.
+[commands.foreman]
+executor = "claude"
+prompt_file = "prompts/foreman.md"
+timeout = "120m"
+
+# ASSESS: full SVCOS security assessment, headless.
+[commands.assess]
+executor = "claude"
+prompt_file = "prompts/assess.md"
+timeout = "60m"
+
+# REVIEW_LOOP: repair a PR against the AI reviewer's comments.
+[commands.greptile-fix]
+executor = "claude"
+prompt_file = "prompts/greptile-fix.md"
+timeout = "60m"
+
+# DEPLOY_DEV: idempotent deploy.mjs chain.
+[commands.dev]
+executor = "deploy-dev-script"
+timeout = "30m"
+
+# TRIAGE: classify an issue or PR and apply intake labels.
+[commands.triage]
+executor = "claude"
+prompt_file = "prompts/triage.md"
+timeout = "20m"
+
+# MAINTAIN merge: Machinist's shepherd, verbatim.
+[commands.shepherd]
+executor = "codex"
+prompt_file = "prompts/shepherd.md"
+timeout = "120m"
+
+# Triggers are intentionally absent: the control plane submits jobs through the API
+# (design §4.9). Add a [triggers.github.<name>] block with label = "${MACHINIST_REQUEST_LABEL}"
+# only as a polling fallback for a repository without the webhook bridge.

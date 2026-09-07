@@ -1,0 +1,67 @@
+/* Agentic Secure Dark Factory — design tokens (design §4.12).
+   Instrument-panel palette: calm surfaces; saturated color only for andon semantics.
+   Light mode is the default (the control room is lit; the factory is dark). */
+
+:root {
+  /* color */
+  --concrete: #e9ecef;
+  --slate: #2b3440;
+  --steel: #5b6b7c;
+  --brass: #b8863b;
+  --andon-run: #2f8f5b;
+  --andon-hold: #d28b1e;
+  --andon-stop: #b23a2e;
+
+  --surface: var(--concrete);
+  --panel: #ffffff;
+  --ink: var(--slate);
+  --ink-muted: var(--steel);
+  --rule: color-mix(in srgb, var(--steel) 35%, transparent);
+  --accent: var(--brass);
+
+  /* type: one family on the surface; monospace only inside log and diff panes */
+  --font-ui: "Schibsted Grotesk", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --text-12: 0.75rem;
+  --text-14: 0.875rem;
+  --text-16: 1rem;
+  --text-20: 1.25rem;
+  --text-28: 1.75rem;
+  --text-40: 2.5rem;
+  --weight-body: 400;
+  --weight-data: 450;
+  --weight-heading: 500;
+  --measure: 72ch;
+
+  /* layout: one 8px grid, two radii */
+  --grid: 8px;
+  --rail-width: 240px;
+  --radius-data: 2px;
+  --radius-drawer: 8px;
+  --shadow-drawer: 0 12px 32px rgba(43, 52, 64, 0.24);
+  --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --surface: var(--slate);
+    --panel: #343e4b;
+    --ink: var(--concrete);
+    --ink-muted: #a7b1bc;
+    --rule: color-mix(in srgb, var(--concrete) 22%, transparent);
+  }
+}
+
+:root[data-theme="dark"] {
+  --surface: var(--slate);
+  --panel: #343e4b;
+  --ink: var(--concrete);
+  --ink-muted: #a7b1bc;
+  --rule: color-mix(in srgb, var(--concrete) 22%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --line-motion: none;
+  }
+}

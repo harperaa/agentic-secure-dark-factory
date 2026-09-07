@@ -1,0 +1,28 @@
+{
+  "spec_version": 0,
+  "name": "acme-analytics",
+  "pitch": "Team analytics for distributed engineering orgs",
+  "admin_email": "owner@acme-analytics.example",
+  "github_owner": "acme",
+  "modules": ["homepage-content", "dashboard-sample"],
+  "secrets_mode": "doppler",
+  "phases": [
+    {
+      "title": "Data model and Convex schema",
+      "acceptance": ["schema typechecks", "seed script runs"],
+      "touches": ["convex/schema.ts", "convex/seed.ts"]
+    },
+    {
+      "title": "Team dashboard page",
+      "acceptance": ["auth-gated", "renders seeded data"],
+      "touches": ["app/dashboard/**", "components/dashboard/**"]
+    }
+  ],
+  "mode": "gray",
+  "greptile_threshold": 5,
+  "max_repair_rounds": 4,
+  "forced_gray_paths": ["middleware.ts", "convex/auth*", "app/api/**", "lib/security/**", "package.json", "package-lock.json"],
+  "assessment": { "deepsec": "auto", "max_new_medium": 0 },
+  "release_policy": { "major_tag_pattern": "^v[0-9]+\\.0\\.0$", "label": "release:major", "manual": true },
+  "providers": { "profile": "default", "sandbox": "local" }
+}

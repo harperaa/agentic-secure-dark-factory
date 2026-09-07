@@ -1,0 +1,61 @@
+# Signed, checksummed releases of sandbox-exec (design §13.4). Runs on version tags only.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  sandbox-exec:
+    name: sandbox-exec
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: darwin, goarch: arm64 }
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: sandbox-exec/go.mod
+          cache: false
+      - name: Build
+        working-directory: sandbox-exec
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          out="sandbox-exec_${GITHUB_REF_NAME}_${GOOS}_${GOARCH}"
+          go build -trimpath -ldflags="-s -w -X main.version=${GITHUB_REF_NAME}" -o "dist/$out" ./cmd/sandbox-exec
+          (cd dist && sha256sum "$out" > "$out.sha256")
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: sandbox-exec/dist/sandbox-exec_*
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: sandbox-exec-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: sandbox-exec/dist/*
+
+  publish:
+    name: publish
+    needs: sandbox-exec
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Combined checksums
+        run: (cd dist && cat -- *.sha256 > SHA256SUMS && rm -- *.sha256)
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          files: dist/*
+          generate_release_notes: true

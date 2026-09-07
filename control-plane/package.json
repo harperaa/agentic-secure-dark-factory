@@ -1,0 +1,26 @@
+{
+  "name": "asdf-control-plane",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Factory-owned control-plane code for Agentic Secure Dark Factory (Convex schema, policy, webhook, UI tokens)",
+  "type": "module",
+  "scripts": {
+    "codegen": "convex codegen",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test factory/policy/*.test.mjs",
+    "validate-spec": "node scripts/validate-spec.mjs"
+  },
+  "dependencies": {
+    "convex": "^1.31.0",
+    "minimatch": "^10.0.3"
+  },
+  "devDependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "typescript": "^5.9.3",
+    "@types/node": "^24.10.1"
+  },
+  "engines": {
+    "node": ">=24.15.0 <26"
+  }
+}

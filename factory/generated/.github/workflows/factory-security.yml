@@ -1,0 +1,76 @@
+# factory-managed: written by Agentic Secure Dark Factory (factory/generated). Edit upstream, not here.
+#
+# Per-PR security CI (design §4.8). Deterministic, no agents. These jobs are required status
+# checks on main alongside SVCOS's own lint, test, security, and build jobs from ci.yml.
+name: factory-security
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: factory-security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  semgrep:
+    name: semgrep
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep:1.176.0
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Static analysis (fail on ERROR severity)
+        env:
+          SEMGREP_RULES: ${{ vars.SEMGREP_RULES || 'p/default p/typescript p/nextjs p/secrets p/owasp-top-ten' }}
+        run: |
+          # shellcheck disable=SC2086
+          semgrep scan --config auto $(printf -- '--config %s ' $SEMGREP_RULES) \
+            --severity ERROR --error --metrics=off --exclude node_modules --exclude .next \
+            --exclude security_context --exclude security_reports --exclude threat_modeling_output
+
+  secrets:
+    name: secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install detect-secrets
+        run: pip install --disable-pip-version-check detect-secrets==1.5.0
+      - name: Scan tracked files against the baseline
+        run: |
+          test -f .secrets.baseline || { echo "missing .secrets.baseline"; exit 1; }
+          git ls-files -z | xargs -0 detect-secrets-hook --baseline .secrets.baseline
+
+  security-check:
+    name: security-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version-file: package.json
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: SVCOS security check (audit, lockfile consistency)
+        run: bash scripts/security-check.sh
+      - name: Lockfile and tree must agree
+        run: npm ls --all >/dev/null
+      - name: Dependency change requires a human (forced gray)
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if git diff --name-only "$BASE" "$HEAD" | grep -qE '^(package\.json|package-lock\.json)$'; then
+            echo "::notice::dependency change detected; this PR is forced gray"
+            echo "forced_gray=dependency" >> "$GITHUB_STEP_SUMMARY"
+          fi

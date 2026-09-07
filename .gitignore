@@ -1,0 +1,27 @@
+# secrets and local config
+factory.env
+*.env
+!factory/config/factory.env.example
+!snapshots/versions.env
+.env*
+!.env.example
+worker.token
+
+# build output
+sandbox-exec/bin/
+control-plane/node_modules/
+control-plane/.convex/
+
+node_modules/
+dist/
+*.tsbuildinfo
+
+# runtime state
+.machinist/
+.worktrees/
+security_context/archive_*/
+
+# editors and OS
+.DS_Store
+.idea/
+.vscode/

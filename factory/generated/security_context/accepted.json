@@ -1,0 +1,6 @@
+{
+  "$comment": "factory-managed template. Accepted security findings for this repository (design §4.8). Each entry needs a human-reviewed reason. The periodic assessment opens issues only for findings not listed here.",
+  "version": 1,
+  "baseline_assessment": null,
+  "accepted": []
+}

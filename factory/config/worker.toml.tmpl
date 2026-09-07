@@ -1,0 +1,42 @@
+# Machinist worker configuration for the Agentic Secure Dark Factory (local runtime).
+# Rendered by factory/scripts/install-machinist-config.sh from factory.env; do not edit the output by hand.
+name = "${MACHINIST_WORKER_NAME}"
+data_directory = "${MACHINIST_HOME}/worker"
+
+[control_plane]
+url = "${MACHINIST_URL}"
+token_file = "${MACHINIST_TOKEN_FILE}"
+
+# --- Agent executors (identical to Machinist's examples/worker.toml) -----------------------
+[executors.codex]
+command = ["codex", "exec", "--json", "--model={{machinist.model}}", "--sandbox", "danger-full-access", "-"]
+models = { luna = "gpt-5.6-luna", terra = "gpt-5.6-terra", sol = "gpt-5.6-sol" }
+
+[executors.claude]
+command = ["claude", "--print", "--verbose", "--output-format", "stream-json", "--model={{machinist.model}}", "--dangerously-skip-permissions"]
+models = { haiku = "haiku", sonnet = "sonnet", opus = "opus" }
+
+# --- Sandboxed variants: same agent, run through sandbox-exec (design §5.2) -----------------
+[executors.claude-sandbox]
+command = ["${FACTORY_ROOT}/sandbox-exec/bin/sandbox-exec", "--backend=${SANDBOX_BACKEND}", "--snapshot=${SANDBOX_SNAPSHOT}", "--", "claude", "--print", "--verbose", "--output-format", "stream-json", "--model={{machinist.model}}", "--dangerously-skip-permissions"]
+models = { haiku = "haiku", sonnet = "sonnet", opus = "opus" }
+
+[executors.codex-sandbox]
+command = ["${FACTORY_ROOT}/sandbox-exec/bin/sandbox-exec", "--backend=${SANDBOX_BACKEND}", "--snapshot=${SANDBOX_SNAPSHOT}", "--", "codex", "exec", "--json", "--model={{machinist.model}}", "--sandbox", "danger-full-access", "-"]
+models = { luna = "gpt-5.6-luna", terra = "gpt-5.6-terra", sol = "gpt-5.6-sol" }
+
+# --- Repository-owned script executors (Machinist "Tier 0") --------------------------------
+[executors.genesis-script]
+command = ["${FACTORY_ROOT}/factory/scripts/genesis.sh"]
+
+[executors.deploy-dev-script]
+command = ["${FACTORY_ROOT}/factory/scripts/deploy-dev.sh"]
+
+# --- Repositories -------------------------------------------------------------------------
+# Genesis runs inside the workspace and clones the new product beneath it.
+[repositories.factory-workspace]
+path = "${FACTORY_WORKSPACE}"
+
+# Product repositories are appended by factory/scripts/register-repository.sh:
+# [repositories.<name>]
+# path = "/absolute/path"
