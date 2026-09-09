@@ -109,13 +109,19 @@ the spec JSON as the prompt. See [docs/runtimes/local.md](docs/runtimes/local.md
 
 ## Status
 
-Draft v0.4 design. M-1 (repository skeleton, security CI, docs) is complete and
-the M1 code paths exist locally: idempotent `genesis.sh`, headless prompt
-contracts, Machinist config templates, `sandbox-exec` with the `local` backend,
-and the Convex schema, policy, and webhook receiver. Next is M0: run Machinist
-locally against a real SVCOS issue, then prove genesis end to end and resolve
-R1/R2 (headless Convex and Doppler project creation). See the milestone table in
-[docs/design.md](docs/design.md#14-milestones).
+| Milestone | State |
+|---|---|
+| M-1 Repository, security CI, branch protection | done |
+| M0 Local runtime; foreman on a real issue | done (foreman opened a PR on the first product; blocked on the product's own CI baseline) |
+| M1 Genesis, headless prompts, phase issues | done (spec to dev URL proven end to end on the local runtime) |
+| M2 Provider adapters, sandbox backends, snapshot | adapters PR in flight; `sandbox-exec` Docker backend proven against the built image; Daytona unit-tested only |
+| M3 Control plane (Convex state machine, bridge, Web UI) | done and deployed to the factory's own Convex, Doppler, Clerk, and Vercel |
+| M4 Gates (CI + reviewer + forced gray, repair rounds, assessment, alerts) | built; exercised through the first real decision; reviewer integration waits on the Greptile app install |
+| M5 Gray GA, M6 Dark mode | policy and checklist gate built; operational tuning pending real runs |
+| M7 EU profile | adapters written with honest `verified: false` capabilities; identity and payments refused until SVCOS modules exist |
+| M8 Upstream proposals | six issues opened on Secure Vibe Coding OS; Machinist Runtime seam drafted in `docs/upstream/` |
+
+Runtime pieces on the operator machine: `factory/scripts/start-local.sh` (Machinist), `factory/bridge/bridge.mjs` (bridge), `factory/scripts/doctor.sh` (onboarding discovery). See [docs/design.md](docs/design.md#14-milestones).
 
 ## License
 
