@@ -207,3 +207,67 @@ export const adoptProject = mutation({
     return projectId;
   },
 });
+
+/** Projects whose PR the bridge should poll for CI and reviewer state (webhook-independent). */
+export const reviewTargets = query({
+  args: { secret: v.string() },
+  handler: async (ctx, { secret }) => {
+    requireBridge(secret);
+    const projects = await ctx.db.query("projects").withIndex("by_stage", (q) => q.eq("stage", "REVIEW_LOOP")).collect();
+    return projects
+      .filter((p) => p.repo !== undefined && p.currentPr !== undefined)
+      .map((p) => ({ projectId: p._id, repo: p.repo as string, pr: p.currentPr as number }));
+  },
+});
+
+/** Bridge-observed gate state for a PR: CI check conclusions and the reviewer's verdict. */
+export const gateSync = mutation({
+  args: {
+    secret: v.string(),
+    projectId: v.id("projects"),
+    pr: v.number(),
+    headSha: v.optional(v.string()),
+    ci: v.array(v.object({ name: v.string(), conclusion: v.string() })),
+    reviewScore: v.union(v.number(), v.null()),
+    unresolvedComments: v.number(),
+    changedPaths: v.array(v.string()),
+    labels: v.array(v.string()),
+  },
+  handler: async (ctx, { secret, projectId, pr, headSha, ci, reviewScore, unresolvedComments, changedPaths, labels }) => {
+    requireBridge(secret);
+    const project = await ctx.db.get(projectId);
+    if (!project) {
+      return;
+    }
+    const existing = await ctx.db
+      .query("gates")
+      .withIndex("by_project_pr", (q) => q.eq("projectId", projectId).eq("pr", pr))
+      .order("desc")
+      .first();
+    const now = Date.now();
+    const review = {
+      score: reviewScore,
+      threshold: project.greptileThreshold,
+      unresolvedComments,
+      round: existing?.review?.round ?? project.repairRound ?? 0,
+      reviewedAt: now,
+    };
+    const patch = { ...(headSha === undefined ? {} : { headSha }), ci, review, updatedAt: now };
+    if (existing) {
+      const changed = JSON.stringify({ ci: existing.ci, s: existing.review?.score, u: existing.review?.unresolvedComments }) !== JSON.stringify({ ci, s: reviewScore, u: unresolvedComments });
+      await ctx.db.patch(existing._id, changed ? patch : { updatedAt: existing.updatedAt });
+      if (changed) {
+        await ctx.scheduler.runAfter(0, internal.gates.evaluate, { projectId });
+      }
+    } else {
+      const latestRun = await ctx.db.query("runs").withIndex("by_project", (q) => q.eq("projectId", projectId)).order("desc").first();
+      if (!latestRun) {
+        return;
+      }
+      await ctx.db.insert("gates", { runId: latestRun._id, projectId, pr, verdict: "pending", ...patch });
+      await ctx.scheduler.runAfter(0, internal.gates.evaluate, { projectId });
+    }
+    // Record the changed paths and labels for the forced-gray classifier.
+    await ctx.scheduler.runAfter(0, internal.gates.classify, { projectId, pr, changedPaths, labels });
+  },
+});

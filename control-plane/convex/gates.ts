@@ -26,12 +26,8 @@ export const evaluate = internalMutation({
     const ciFailed = ciConclusions.some((c) => c === "failure" || c === "timed_out" || c === "cancelled");
     const ciPassed = ciConclusions.length > 0 && ciConclusions.every((c) => c === "success" || c === "neutral" || c === "skipped");
     const review = gate?.review;
-    const forcedGray = classifyForcedGray({
-      changedPaths: (gate?.forcedGray?.reasons ?? []).length ? [] : [],
-      forcedGrayPaths: project.forcedGrayPaths,
-      labels: gate?.forcedGray?.forced ? ["factory:forced-gray"] : [],
-    });
-    const forced = gate?.forcedGray?.forced === true || forcedGray.forced;
+    const forcedGray = gate?.forcedGray ?? { forced: false, reasons: [] };
+    const forced = forcedGray.forced;
 
     const open = await ctx.db
       .query("decisions")
@@ -44,8 +40,8 @@ export const evaluate = internalMutation({
     // Pending: no CI verdict yet, or reviewer has not spoken.
     const waitingOnReviewer = reviewerRequired && (review === undefined || review.score === null);
     if ((!ciPassed && !ciFailed) || waitingOnReviewer) {
-      const waited = gate ? now - gate.updatedAt : 0;
-      if (waited > 20 * 60_000 && gate) {
+      const waited = now - (gate?.updatedAt ?? project.updatedAt);
+      if (waited > 20 * 60_000) {
         await ctx.db.insert("decisions", {
           projectId,
           kind: "unblock",
@@ -139,5 +135,26 @@ export const evaluateForRepo = internalMutation({
     if (project) {
       await ctx.scheduler.runAfter(0, internal.gates.evaluate, { projectId: project._id });
     }
+  },
+});
+
+/** Forced-gray classification from the bridge's observed changed paths and labels. */
+export const classify = internalMutation({
+  args: { projectId: v.id("projects"), pr: v.number(), changedPaths: v.array(v.string()), labels: v.array(v.string()) },
+  handler: async (ctx, { projectId, pr, changedPaths, labels }) => {
+    const project = await ctx.db.get(projectId);
+    if (!project) {
+      return;
+    }
+    const gate = await ctx.db
+      .query("gates")
+      .withIndex("by_project_pr", (q) => q.eq("projectId", projectId).eq("pr", pr))
+      .order("desc")
+      .first();
+    if (!gate) {
+      return;
+    }
+    const result = classifyForcedGray({ changedPaths, forcedGrayPaths: project.forcedGrayPaths, labels });
+    await ctx.db.patch(gate._id, { forcedGray: result, updatedAt: Date.now() });
   },
 });

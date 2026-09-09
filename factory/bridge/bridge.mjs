@@ -163,6 +163,34 @@ async function runEffect(effect) {
   }
 }
 
+// --- gate sync (webhook-independent view of CI and reviewer state) ---------------------------
+let lastGateSync = 0;
+async function syncGates() {
+  if (Date.now() - lastGateSync < Number(process.env.BRIDGE_GATE_SYNC_MS ?? 60_000)) return;
+  lastGateSync = Date.now();
+  const targets = await convex.query(api.bridge.reviewTargets, { secret });
+  for (const t of targets) {
+    const checks = sh("gh", ["pr", "checks", String(t.pr), "--repo", t.repo, "--json", "name,bucket"]);
+    const ci = checks.ok ? JSON.parse(checks.stdout || "[]").map((c) => ({ name: c.name, conclusion: c.bucket === "pass" ? "success" : c.bucket === "fail" ? "failure" : c.bucket === "skipping" ? "skipped" : "pending" })) : [];
+    const view = sh("gh", ["pr", "view", String(t.pr), "--repo", t.repo, "--json", "headRefOid,files,labels"]);
+    const v = view.ok ? JSON.parse(view.stdout) : {};
+    const score = sh(path.join(factoryRoot, "factory/scripts/greptile-score.sh"), [t.repo, String(t.pr)]);
+    const sc = score.ok ? JSON.parse(score.stdout) : { score: null, comments: [] };
+    await convex.mutation(api.bridge.gateSync, {
+      secret,
+      projectId: t.projectId,
+      pr: t.pr,
+      ...(v.headRefOid ? { headSha: v.headRefOid } : {}),
+      ci,
+      reviewScore: sc.score ?? null,
+      unresolvedComments: (sc.comments ?? []).filter((c) => !c.in_reply_to_id).length,
+      changedPaths: (v.files ?? []).map((f) => f.path),
+      labels: (v.labels ?? []).map((l) => l.name),
+    });
+    log("gate-sync", "passed", `repo=${t.repo} pr=${t.pr} ci=${ci.length} score=${sc.score ?? "none"}`);
+  }
+}
+
 // --- loop -----------------------------------------------------------------------------------
 async function tick() {
   const { runs, effects } = await convex.query(api.bridge.pollQueued, { secret });
@@ -171,6 +199,7 @@ async function tick() {
   }
   for (const effect of effects) await runEffect(effect);
   await reconcileRuns();
+  await syncGates();
 }
 
 log("start", "passed", `convex=${process.env.CONVEX_URL} machinist=${machinistUrl} poll_ms=${pollMs}`);
