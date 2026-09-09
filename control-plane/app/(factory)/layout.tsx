@@ -3,6 +3,7 @@ import { Schibsted_Grotesk } from "next/font/google";
 import { SignedIn, SignedOut, RedirectToSignIn } from "@clerk/nextjs";
 import { Rail } from "./_components/rail";
 import { OperatorBoundary } from "./_components/error-boundary";
+import { ConvexGate } from "./_components/convex-gate";
 
 const schibsted = Schibsted_Grotesk({
   subsets: ["latin"],
@@ -39,7 +40,9 @@ export default function FactoryLayout({ children }: { children: React.ReactNode 
           <div className="flex min-h-screen flex-col md:flex-row">
             <Rail siteName={process.env.NEXT_PUBLIC_SITE_NAME || "Factory"} />
             <main id="factory-main" className="min-w-0 flex-1 px-4 py-4 md:px-8 md:py-6">
-              <OperatorBoundary>{children}</OperatorBoundary>
+              <OperatorBoundary>
+                <ConvexGate>{children}</ConvexGate>
+              </OperatorBoundary>
             </main>
           </div>
         </div>
