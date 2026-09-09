@@ -190,6 +190,12 @@ export const onEffectDone = internalMutation({
     if (!project) {
       return;
     }
+    if (effect.kind === "apply-label" && (effect.args as { label?: string }).label === "machinist:auto-merge") {
+      // The permission label is on; the shepherd verifies, updates, repairs, and merges (design §4.9).
+      const max = process.env.SHEPHERD_MAX_ACTIONS ?? "3";
+      await enqueue(ctx, project, "REVIEW_LOOP", "shepherd", `Run the Shepherd queue for ${project.name} with max_actions=${max}. Perform at most ${max} mutating actions in this run.`, project.currentPr !== undefined && project.repo ? `https://github.com/${project.repo}/pull/${project.currentPr}` : undefined);
+      return;
+    }
     if (effect.kind === "register-repository") {
       await ctx.db.insert("effects", {
         projectId: project._id,
@@ -278,5 +284,37 @@ export const onRelease = internalMutation({
     const a = spec(project).assessment ?? {};
     await transition(ctx, project, "ASSESS", undefined, { mode: "reassessment", tag });
     await enqueue(ctx, project, "ASSESS", "assess", `--mode=reassessment --deepsec=${a.deepsec ?? "auto"} --baseline=${a.baseline_path ?? "security_context/accepted.json"} --max-new-medium=${a.max_new_medium ?? 0}`, `https://github.com/${repo}/releases/tag/${tag}`);
+  },
+});
+
+/** Operator says the blocker is cleared. With a PR in flight, re-evaluate the gate; otherwise re-run the stage. */
+export const unblock = internalMutation({
+  args: { projectId: v.id("projects"), actor: v.string() },
+  handler: async (ctx, { projectId, actor }) => {
+    const project = await ctx.db.get(projectId);
+    if (!project || project.stage !== "NEEDS_HUMAN") {
+      return { action: "none" };
+    }
+    const now = Date.now();
+    const open = await ctx.db.query("decisions").withIndex("by_project_status", (q) => q.eq("projectId", projectId).eq("status", "open")).collect();
+    for (const d of open) {
+      if (d.kind === "unblock") {
+        await ctx.db.patch(d._id, { status: "resolved", resolvedBy: actor, resolvedAt: now });
+      }
+    }
+    if (project.currentPr !== undefined && project.repo) {
+      await ctx.db.patch(projectId, { stage: "REVIEW_LOOP", repairRound: 0, updatedAt: now });
+      await ctx.db.insert("events", { projectId, at: now, actor, action: "stage.transition", before: { stage: "NEEDS_HUMAN" }, after: { stage: "REVIEW_LOOP", reason: "unblocked" } });
+      await ctx.scheduler.runAfter(0, internal.gates.evaluate, { projectId });
+      return { action: "re-evaluate", pr: project.currentPr };
+    }
+    const last = await ctx.db.query("runs").withIndex("by_project", (q) => q.eq("projectId", projectId)).order("desc").first();
+    if (!last) {
+      return { action: "none" };
+    }
+    await enqueue(ctx, project, last.stage, last.command, last.prompt, last.ref);
+    await ctx.db.patch(projectId, { stage: last.stage, retryCount: 0, updatedAt: now });
+    await ctx.db.insert("events", { projectId, at: now, actor, action: "run.retry", after: { stage: last.stage, reason: "unblocked" } });
+    return { action: "re-run", stage: last.stage };
   },
 });
