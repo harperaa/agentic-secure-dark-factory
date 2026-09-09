@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Fake `docker` for the hosting/scaleway adapter tests: build and push succeed, nothing else.
+set -euo pipefail
+printf 'docker %s\n' "$*" >> "${FAKE_LOG:-/dev/null}"
+case "${1:-}" in
+  build|push) exit 0 ;;
+  *) printf 'fake docker: unhandled %s\n' "$*" >&2; exit 99 ;;
+esac

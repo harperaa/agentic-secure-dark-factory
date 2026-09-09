@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Fake `npm` for adapter contract tests: `npm ci` materialises node_modules and nothing else.
+set -euo pipefail
+printf 'npm %s\n' "$*" >> "${FAKE_LOG:-/dev/null}"
+case "${1:-}" in
+  ci) mkdir -p node_modules; touch node_modules/.fake ;;
+  *) exit 0 ;;
+esac

@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Fake `node` for adapter contract tests. Emulates the SVCOS script subcommands genesis and
+# deploy-dev call, records every invocation, and writes the artifacts the real scripts write.
+# Env knobs: FAKE_LOG (argv record), FAKE_DOPPLER_STORE (key=value file the fake doppler reads),
+# FAKE_FAIL=<subcommand> (report {"success":false}), FAKE_EXIT=<subcommand> (exit 1 mid-output),
+# FAKE_INIT_WARNING=1 (init reports a Doppler push warning).
+set -euo pipefail
+printf 'node %s\n' "$*" >> "${FAKE_LOG:-/dev/null}"
+script="${1:-}"; sub="${2:-}"; shift 2 || true
+
+store_set() {
+  if [ -f .doppler.yaml ]; then
+    printf '%s=%s\n' "$1" "$2" >> "${FAKE_DOPPLER_STORE:?}"
+  else
+    grep -qs "^$1=" .env.local 2>/dev/null || printf '%s=%s\n' "$1" "$2" >> .env.local
+  fi
+}
+result() {
+  if [ "${FAKE_EXIT:-}" = "$sub" ]; then printf 'progress line\n'; exit 1; fi
+  if [ "${FAKE_FAIL:-}" = "$sub" ]; then
+    printf 'progress line\n{\n  "success": false,\n  "error": "fake_%s_failed",\n  "detail": "forced by FAKE_FAIL"\n}\n' "$sub"
+    exit 0
+  fi
+  printf 'progress line\n%s\n' "$1"
+}
+
+case "$script:$sub" in
+  scripts/setup.mjs:doppler-bootstrap)
+    printf 'setup:\n  project: fake\n  config: dev\n' > .doppler.yaml
+    result '{
+  "success": true,
+  "steps": ["Doppler project ready"],
+  "project": "fake"
+}' ;;
+  scripts/setup.mjs:init)
+    store_set NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY pk_test_fake
+    store_set CLERK_SECRET_KEY sk_test_fake
+    store_set NEXT_PUBLIC_CLERK_FRONTEND_API_URL https://fake.clerk.accounts.dev
+    warn=""
+    [ "${FAKE_INIT_WARNING:-}" = "1" ] && warn=', "Warning: Doppler push failed: 401"'
+    result "{
+  \"success\": true,
+  \"steps\": [\"Clerk app created\"$warn],
+  \"claimUrl\": \"https://dashboard.clerk.com/apps/claim?token=fake\",
+  \"accountless\": true
+}" ;;
+  scripts/setup.mjs:convex-setup)
+    printf 'CONVEX_DEPLOYMENT=dev:fake-123\nNEXT_PUBLIC_CONVEX_URL=https://fake-123.convex.cloud\nNEXT_PUBLIC_CONVEX_SITE_URL=https://fake-123.convex.site\n' >> .env.local
+    result '{
+  "success": true,
+  "deploymentUrl": "https://fake-123.convex.cloud"
+}' ;;
+  scripts/setup.mjs:configure)
+    result '{
+  "success": true,
+  "convexEnvVarsSet": ["CLERK_WEBHOOK_SECRET"]
+}' ;;
+  scripts/setup.mjs:write-install-summary)
+    mkdir -p docs; printf '# Installation Summary\n' > docs/INSTALL.md
+    result '{"success":true,"path":"docs/INSTALL.md"}' ;;
+  scripts/setup.mjs:doppler-sync-env-local)
+    result '{"success":true,"pushed":[]}' ;;
+  scripts/setup.mjs:doppler-create-ci-token)
+    [ -n "${GH_REPO:-}" ] || { printf 'multiple remotes detected. please specify which repo to use by providing the -R, --repo argument\n'; printf '{"success":false,"step":"gh-secret-set","error":"gh secret set DOPPLER_TOKEN failed."}\n'; exit 0; }
+    printf 'DOPPLER_TOKEN\n' >> "${FAKE_GH_SECRETS:-/dev/null}"
+    result '{"success":true,"steps":["Created Doppler service token"]}' ;;
+  scripts/modules.mjs:install)
+    result '{"success":true,"installed":[]}' ;;
+  scripts/deploy.mjs:check-tools)
+    result "{
+  \"os\": \"darwin\",
+  \"tools\": {\"node\": \"24\", \"git\": \"2\", \"gh\": \"2\", \"ghAuth\": ${FAKE_GH_AUTH:-true}},
+  \"installed\": [\"node\", \"git\", \"gh\"],
+  \"missing\": [${FAKE_MISSING_TOOLS:-}]
+}" ;;
+  scripts/deploy.mjs:github-setup)
+    owner=""; repo=""
+    for a in "$@"; do case "$a" in --owner=*) owner="${a#*=}" ;; --repo-name=*) repo="${a#*=}" ;; esac; done
+    if git remote get-url origin >/dev/null 2>&1; then git remote rename origin upstream >/dev/null 2>&1 || true; fi
+    # A local bare repository stands in for GitHub so the real `git push` in genesis succeeds.
+    remote="${FAKE_REMOTES_DIR:?}/$owner/$repo.git"
+    mkdir -p "$(dirname "$remote")"
+    [ -d "$remote" ] || git init -q --bare "$remote"
+    git remote add origin "$remote"
+    git push -q -u origin HEAD
+    result "{
+  \"success\": true,
+  \"repoUrl\": \"https://github.com/$owner/$repo\",
+  \"actualOwner\": \"$owner\"
+}" ;;
+  scripts/deploy.mjs:vercel-env-dev)
+    result '{"success":true,"steps":["DOPPLER_TOKEN set on Vercel"]}' ;;
+  scripts/deploy.mjs:vercel-deploy)
+    result '{
+  "success": true,
+  "url": "https://fake-product.vercel.app",
+  "dashboardUrl": "https://vercel.com/fake/fake-product/deployments"
+}' ;;
+  scripts/deploy.mjs:write-summary)
+    mkdir -p docs
+    { printf '# Dev Deployment Summary\n\n'; for a in "$@"; do printf '%s\n' "$a"; done; } > docs/DEPLOYMENT-DEV.md
+    result '{"success":true,"path":"docs/DEPLOYMENT-DEV.md"}' ;;
+  *)
+    printf 'fake node: unhandled %s %s\n' "$script" "$sub" >&2; exit 99 ;;
+esac

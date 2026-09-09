@@ -6,7 +6,7 @@ SHELL := /usr/bin/env bash
 
 GO_DIR := sandbox-exec
 CP_DIR := control-plane
-SCRIPTS := $(shell find factory/scripts snapshots -type f -name '*.sh')
+SCRIPTS := $(shell find factory/scripts factory/providers factory/tests snapshots -type f -name '*.sh')
 
 .PHONY: all check build test lint guard spec typecheck install-machinist-config snapshot clean
 
@@ -19,6 +19,7 @@ build:
 
 test:
 	cd $(GO_DIR) && go test ./...
+	factory/tests/run.sh
 
 lint:
 	cd $(GO_DIR) && go vet ./...

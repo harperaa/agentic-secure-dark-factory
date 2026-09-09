@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Fake `gh` for adapter contract tests. FAKE_GH_SECRETS lists Actions secret names (one per line).
+set -euo pipefail
+printf 'gh %s\n' "$*" >> "${FAKE_LOG:-/dev/null}"
+case "${1:-} ${2:-}" in
+  "auth status") exit 0 ;;
+  "repo view")
+    printf 'https://github.com/%s\n' "$3" ;;
+  "repo set-default")
+    printf 'set-default %s\n' "$3" >> "${FAKE_LOG:-/dev/null}" ;;
+  "secret list")
+    [ -f "${FAKE_GH_SECRETS:-/nonexistent}" ] && cat "$FAKE_GH_SECRETS" || true ;;
+  "api user")
+    printf 'fakeuser\n' ;;
+  "api user/orgs")
+    printf 'fake-org\n' ;;
+  "api -X")
+    exit 0 ;;
+  "api "*)
+    case "$2" in
+      *required_status_checks) printf '["lint","test"]\n' ;;
+      *) printf '{}\n' ;;
+    esac ;;
+  *) printf 'fake gh: unhandled %s\n' "$*" >&2; exit 99 ;;
+esac

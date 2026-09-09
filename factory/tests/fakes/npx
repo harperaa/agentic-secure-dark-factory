@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Fake `npx` for adapter contract tests: routes `npx vercel ...` to the fake vercel and answers
+# the convex calls the adapters make.
+set -euo pipefail
+printf 'npx %s\n' "$*" >> "${FAKE_LOG:-/dev/null}"
+args=("$@")
+while [ "${#args[@]}" -gt 0 ] && [[ "${args[0]}" == --* ]]; do args=("${args[@]:1}"); done
+case "${args[0]:-}" in
+  vercel) exec "$(dirname "$0")/vercel" "${args[@]:1}" ;;
+  convex)
+    case "${args[1]:-}" in
+      "login") printf 'Status: Logged in\nTeams: 1 teams accessible\n  - Fake team (fake-team)\n' ;;
+      *) exit 0 ;;
+    esac ;;
+  *) printf 'fake npx: unhandled %s\n' "$*" >&2; exit 99 ;;
+esac

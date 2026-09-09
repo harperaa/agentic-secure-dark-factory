@@ -58,6 +58,8 @@ jobs:
       - name: sandbox-exec tests
         working-directory: sandbox-exec
         run: go test ./...
+      - name: Provider adapter contract tests (fake CLIs, no network)
+        run: factory/tests/run.sh
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version-file: control-plane/package.json
