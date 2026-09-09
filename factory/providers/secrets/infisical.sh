@@ -10,7 +10,7 @@
 # skips that step with a reason.
 
 secrets_infisical_capabilities() {
-  jq -cn '{kind:"secrets", name:"infisical", implemented:true, verified:false, secrets_mode:"env",
+  jq -cn --arg mode env '{kind:"secrets", name:"infisical", implemented:true, verified:false, secrets_mode:$mode,
     needs_env:["INFISICAL_PROJECT_ID","INFISICAL_API_URL"], optional_env:["INFISICAL_TOKEN","INFISICAL_ENV"],
     needs_cmd:["infisical"], supports:["bootstrap","has","get","set","sync_local","export_env"],
     human_gate:"create the Infisical project and a machine identity for CI; set INFISICAL_PROJECT_ID", residency:"EU"}'

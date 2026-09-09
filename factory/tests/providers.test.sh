@@ -83,7 +83,7 @@ assert_contains "$out" "ERROR step=init reason=secrets-push-failed" "Doppler pus
 
 # --- secrets/infisical (env mode): bootstrap writes .env.local shape --------------------------
 prod2=$(make_product "$sb" p3); cd "$prod2" || exit 1
-printf 'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_eu\nCSRF_SECRET=abc\n' > "$FAKE_INFISICAL_STORE"
+printf 'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_eu\nCSRF_SECRET=abc\n' > "$FAKE_INFISICAL_STORE" # pragma: allowlist secret
 export INFISICAL_PROJECT_ID=proj-fake INFISICAL_API_URL=https://eu.infisical.test
 bash -c "cd '$prod2'; source '$FACTORY_ROOT/factory/scripts/lib/common.sh'; source '$FACTORY_ROOT/factory/providers/load.sh'; providers_load '$(spec_json p3 eu)'; secrets_bootstrap p3; secrets_mode" > mode.txt
 assert_eq "$(cat mode.txt)" env "infisical adapter is env mode"

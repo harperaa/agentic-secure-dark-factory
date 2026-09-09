@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Fake `codex` so llm/openai and llm/mistral adapters' needs_cmd is satisfied in tests.
+set -euo pipefail
+printf 'codex %s\n' "$*" >> "${FAKE_LOG:-/dev/null}"
+case "${1:-}" in
+  --version) printf '0.0.0-fake\n' ;;
+  *) printf 'fake codex: unhandled %s\n' "$*" >&2; exit 99 ;;
+esac

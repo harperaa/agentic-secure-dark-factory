@@ -130,7 +130,7 @@ assert_contains "$out" "progress line" "output before the crash is still printed
 out=$(run_genesis "$(spec_json g4 eu '| .providers.payments="mollie"')")
 assert_contains "$out" "NEEDS_HUMAN reason=provider-unsupported kind=payments name=mollie" "unsupported EU payments refused"
 assert_no_file "$FACTORY_WORKSPACE/g4" "nothing cloned when the gate refuses"
-out=$(run_genesis "$(spec_json g5 default '| .secrets_mode="env"')")
+out=$(run_genesis "$(spec_json g5 default '| .secrets_mode="env"')") # pragma: allowlist secret
 assert_contains "$out" "NEEDS_HUMAN reason=secrets-mode-mismatch" "spec secrets_mode must match the adapter"
 
 test_summary genesis

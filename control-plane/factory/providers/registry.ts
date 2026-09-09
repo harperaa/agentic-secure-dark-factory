@@ -21,7 +21,7 @@ export const PROVIDER_KINDS = [
 
 export type ProviderKind = (typeof PROVIDER_KINDS)[number];
 export type Profile = "default" | "eu";
-export type SecretsMode = "doppler" | "env";
+export type SecretsMode = "doppler" | "env"; // pragma: allowlist secret
 export type Residency = "US" | "EU" | "operator";
 
 export type Adapter = {
@@ -97,7 +97,7 @@ export const PROFILE_DEFAULTS: Record<Profile, Record<ProviderKind, string>> = {
   eu: {
     hosting: "scaleway",
     identity: "clerk", // design R14: EU data plane, Clerk identity until auth-oidc exists
-    secrets: "infisical",
+    secrets: "infisical", // pragma: allowlist secret
     backend: "convex-selfhosted",
     payments: "clerk-billing", // design R14
     sandbox: "local",

@@ -6,7 +6,7 @@
 # treating it as "not configured" would re-run init or convex-setup and duplicate resources.
 
 secrets_doppler_capabilities() {
-  jq -cn '{kind:"secrets", name:"doppler", implemented:true, verified:true, secrets_mode:"doppler",
+  jq -cn --arg mode doppler '{kind:"secrets", name:"doppler", implemented:true, verified:true, secrets_mode:$mode,
     needs_env:[], needs_cmd:["doppler"],
     supports:["bootstrap","has","get","set","sync_local","ci_token","export_env"]}'
 }
@@ -64,7 +64,7 @@ secrets_doppler_set() {
 # The keys the backend writes to .env.local that Doppler must carry (SVCOS install "Doppler
 # post-init"). Nothing else in .env.local is synced: Vercel's VERCEL_OIDC_TOKEN and other local
 # artefacts must not land in the secrets broker.
-SECRETS_DOPPLER_SYNC_KEYS="CONVEX_DEPLOYMENT NEXT_PUBLIC_CONVEX_URL NEXT_PUBLIC_CONVEX_SITE_URL"
+SECRETS_DOPPLER_SYNC_KEYS="CONVEX_DEPLOYMENT NEXT_PUBLIC_CONVEX_URL NEXT_PUBLIC_CONVEX_SITE_URL" # pragma: allowlist secret
 
 # secrets_doppler_synced — Doppler dev already holds every Convex key .env.local has.
 secrets_doppler_synced() {
@@ -94,7 +94,7 @@ secrets_doppler_has_ci_token() {
 }
 
 # The service-token name SVCOS's doppler-create-ci-token uses (scripts/setup.mjs).
-SECRETS_DOPPLER_CI_TOKEN_NAME="github-actions-ci"
+SECRETS_DOPPLER_CI_TOKEN_NAME="github-actions-ci" # pragma: allowlist secret
 
 # secrets_doppler_ci_token OWNER/REPO — revoke stale tokens of the same name (SVCOS creates the
 # token before `gh secret set`, so every failed attempt leaked a live one), then create and push.
