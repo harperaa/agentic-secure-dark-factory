@@ -16,7 +16,27 @@ case "${1:-} ${2:-}" in
     printf 'fake-org\n' ;;
   "api -X")
     exit 0 ;;
+  "api graphql")
+    # Review-reader fixtures: FAKE_GH_REVIEW_DIR/graphql-1.json, graphql-2.json (second page when the query carries `after:`).
+    if [ -n "${FAKE_GH_REVIEW_DIR:-}" ]; then
+      f="$FAKE_GH_REVIEW_DIR/graphql-1.json"; printf '%s' "$*" | grep -q 'after:' && f="$FAKE_GH_REVIEW_DIR/graphql-2.json"
+      cat "$f"; exit 0
+    fi
+    printf '{}\n' ;;
   "api "*)
+    if [ -n "${FAKE_GH_REVIEW_DIR:-}" ]; then
+      # Serve fixtures and apply the caller's --jq filter with real jq (env passes through for $ENV).
+      filter=""; prev=""; for a in "$@"; do [ "$prev" = "--jq" ] && filter="$a"; prev="$a"; done
+      case "$2" in
+        */pulls/*/reviews)  f="$FAKE_GH_REVIEW_DIR/reviews.json" ;;
+        */issues/*/comments) f="$FAKE_GH_REVIEW_DIR/summary.json" ;;
+        */pulls/*/comments) f="$FAKE_GH_REVIEW_DIR/comments.json" ;;
+        *required_status_checks) printf '["lint","test"]\n'; exit 0 ;;
+        *) printf '{}\n'; exit 0 ;;
+      esac
+      [ -f "$f" ] || { printf '[]\n' > /dev/null; f=/dev/null; }
+      if [ -n "$filter" ]; then jq -r "$filter" "$f"; else cat "$f"; fi; exit 0
+    fi
     case "$2" in
       *required_status_checks) printf '["lint","test"]\n' ;;
       *) printf '{}\n' ;;

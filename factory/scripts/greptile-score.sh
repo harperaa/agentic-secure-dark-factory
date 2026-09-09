@@ -21,9 +21,10 @@ summary=$(gh api "repos/$repo/issues/$pr/comments" --paginate \
   --jq '[.[] | select(.user.login == $ENV.GREPTILE_BOT_LOGIN) | select(.body | test("Confidence Score"))] | last // empty')
 # Take the score from whichever of the two is newer among those that carry one, so a fresh review
 # is never shadowed by an older summary (or the reverse) and a score-less review never blanks it.
+# Greptile re-reviews by editing its summary comment in place, so the summary's time is updated_at.
 newest=$(jq -cn --argjson r "${review:-null}" --argjson s "${summary:-null}" '
   [ (if $r then {at: ($r.submitted_at // ""), body: ($r.body // "")} else empty end),
-    (if $s then {at: ($s.created_at // ""), body: ($s.body // "")} else empty end) ]
+    (if $s then {at: ($s.updated_at // $s.created_at // ""), body: ($s.body // "")} else empty end) ]
   | map(select(.body | test("Confidence Score"))) | sort_by(.at) | last // {body: ""}')
 score=$(printf '%s' "$newest" | jq -r '.body' | grep -oE 'Confidence Score:?\s*[0-5]\s*/\s*5' | grep -oE '[0-5]' | head -n 1 || true)
 comments=$(gh api "repos/$repo/pulls/$pr/comments" --paginate \
@@ -32,7 +33,8 @@ comments=$(gh api "repos/$repo/pulls/$pr/comments" --paginate \
 owner="${repo%%/*}"; name="${repo#*/}"
 unresolved=0; cursor=""
 while :; do
-  after=$([ -n "$cursor" ] && printf ', after:\"%s\"' "$cursor")
+  after=""
+  if [ -n "$cursor" ]; then after=$(printf ', after:\"%s\"' "$cursor"); fi
   page=$(gh api graphql -f query="{ repository(owner:\"$owner\", name:\"$name\") { pullRequest(number:$pr) { reviewThreads(first:100$after) { pageInfo { hasNextPage endCursor } nodes { isResolved comments(first:1) { nodes { author { login } } } } } } } }" 2>/dev/null) || break
   n=$(printf '%s' "$page" | jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select((.isResolved|not) and .comments.nodes[0].author.login == $ENV.GREPTILE_BOT_LOGIN)] | length')
   unresolved=$((unresolved + n))
