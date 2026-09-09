@@ -216,9 +216,17 @@ export const reviewTargets = query({
     // Stopped projects keep their gate fresh too, so an unblock evaluates current CI, not the failure it stopped on.
     const inReview = await ctx.db.query("projects").withIndex("by_stage", (q) => q.eq("stage", "REVIEW_LOOP")).collect();
     const stopped = await ctx.db.query("projects").withIndex("by_stage", (q) => q.eq("stage", "NEEDS_HUMAN")).collect();
-    return [...inReview, ...stopped]
-      .filter((p) => p.repo !== undefined && p.currentPr !== undefined)
-      .map((p) => ({ projectId: p._id, repo: p.repo as string, pr: p.currentPr as number }));
+    const targets = [...inReview, ...stopped].filter((p) => p.repo !== undefined && p.currentPr !== undefined);
+    const out: Array<{ projectId: typeof targets[number]["_id"]; repo: string; pr: number; reviewRequestedHead: string | null }> = [];
+    for (const p of targets) {
+      const gate = await ctx.db
+        .query("gates")
+        .withIndex("by_project_pr", (q) => q.eq("projectId", p._id).eq("pr", p.currentPr as number))
+        .order("desc")
+        .first();
+      out.push({ projectId: p._id, repo: p.repo as string, pr: p.currentPr as number, reviewRequestedHead: gate?.reviewRequestedHead ?? null });
+    }
+    return out;
   },
 });
 
@@ -234,8 +242,9 @@ export const gateSync = mutation({
     unresolvedComments: v.number(),
     changedPaths: v.array(v.string()),
     labels: v.array(v.string()),
+    reviewRequestedHead: v.optional(v.string()),
   },
-  handler: async (ctx, { secret, projectId, pr, headSha, ci, reviewScore, unresolvedComments, changedPaths, labels }) => {
+  handler: async (ctx, { secret, projectId, pr, headSha, ci, reviewScore, unresolvedComments, changedPaths, labels, reviewRequestedHead }) => {
     requireBridge(secret);
     const project = await ctx.db.get(projectId);
     if (!project) {
@@ -254,12 +263,12 @@ export const gateSync = mutation({
       round: existing?.review?.round ?? project.repairRound ?? 0,
       reviewedAt: now,
     };
-    const patch = { ...(headSha === undefined ? {} : { headSha }), ci, review, updatedAt: now };
+    const patch = { ...(headSha === undefined ? {} : { headSha }), ...(reviewRequestedHead === undefined ? {} : { reviewRequestedHead }), ci, review, updatedAt: now };
     if (existing) {
       const norm = (list: Array<{ name: string; conclusion: string; required?: boolean }> | undefined) =>
         [...(list ?? [])].sort((a, b) => a.name.localeCompare(b.name)).map((c) => `${c.name}:${c.conclusion}:${c.required === true}`).join("|");
       const changed = JSON.stringify({ ci: norm(existing.ci), s: existing.review?.score, u: existing.review?.unresolvedComments, h: existing.headSha }) !== JSON.stringify({ ci: norm(ci), s: reviewScore, u: unresolvedComments, h: headSha ?? existing.headSha });
-      await ctx.db.patch(existing._id, changed ? patch : { updatedAt: existing.updatedAt });
+      await ctx.db.patch(existing._id, changed ? patch : { updatedAt: existing.updatedAt, ...(reviewRequestedHead === undefined ? {} : { reviewRequestedHead }) });
       if (changed) {
         await ctx.scheduler.runAfter(0, internal.gates.evaluate, { projectId });
       }
