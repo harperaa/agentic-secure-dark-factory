@@ -57,6 +57,11 @@ const data = {
   // Admin-only navigation items
   navAdmin: [
     {
+      title: "Factory floor",
+      url: "/floor",
+      icon: IconDashboard,
+    },
+    {
       title: "Security Monitoring",
       url: "/dashboard/security",
       icon: IconShieldCheck,

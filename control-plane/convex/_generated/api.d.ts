@@ -26,6 +26,7 @@ import type * as runs from "../runs.js";
 import type * as security from "../security.js";
 import type * as seedSecurityEvents from "../seedSecurityEvents.js";
 import type * as stateMachine from "../stateMachine.js";
+import type * as ui from "../ui.js";
 import type * as users from "../users.js";
 
 import type {
@@ -53,6 +54,7 @@ declare const fullApi: ApiFromModules<{
   security: typeof security;
   seedSecurityEvents: typeof seedSecurityEvents;
   stateMachine: typeof stateMachine;
+  ui: typeof ui;
   users: typeof users;
 }>;
 
