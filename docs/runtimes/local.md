@@ -94,6 +94,11 @@ installed on:
   genesis creates it, but so is every other present and future repository on the account. Use it
   only on an account that holds nothing but factory products.
 
+Every product also receives a factory-managed `greptile.json` (from `factory/generated`) that turns on
+re-review on every push (`triggerOnUpdates`), sets strictness, excludes dependabot and template tooling,
+and asks for the `Confidence Score: N/5` line the gate parses. Without `triggerOnUpdates`, Greptile
+reviews a pull request once and ignores the repair pushes, so the review loop never converges.
+
 Greptile retired its manual indexing API in 2026, so there is no per-product API step either way. The
 gate reads the reviewer's confidence score from its summary comment or review. A product without the
 App must set `providers.review` to `none` explicitly (CI-only gate, never auto-merges); there is no
