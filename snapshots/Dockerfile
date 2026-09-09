@@ -71,5 +71,6 @@ LABEL org.opencontainers.image.title="svcos-factory" \
       io.asdf.svcos.ref="${SVCOS_TEMPLATE_REF}" \
       io.asdf.machinist.version="${MACHINIST_VERSION}"
 
-ENTRYPOINT ["/bin/bash", "-lc"]
-CMD ["machinist version && claude --version && codex --version"]
+# No ENTRYPOINT: sandbox-exec runs the agent command exec-style (`docker run <image> <cmd> <args>`),
+# so the image must not wrap it in a shell. The default CMD is a self-check only.
+CMD ["bash", "-lc", "machinist version && claude --version && codex --version"]
