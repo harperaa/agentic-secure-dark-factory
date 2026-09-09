@@ -3,6 +3,7 @@
 # factory's own deployment with the admin session on this machine.
 #   sdf.sh create <spec.json> [--start]   create a project (and start the line)
 #   sdf.sh status <name>                  line state, recent runs, open decisions
+#   sdf.sh retry <name>                   re-run the last failed stage after fixing the cause
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
@@ -18,9 +19,13 @@ case "$cmd" in
     args=$(jq -c --argjson start "$start" '{spec: ., start: $start}' "$spec_path")
     (cd "$cp_dir" && npx convex run cli:createProject "$args")
     ;;
+  retry)
+    name="${1:-}"; [ -n "$name" ] || die "usage: sdf.sh retry <name>"
+    (cd "$cp_dir" && npx convex run cli:retryStage "$(jq -cn --arg n "$name" '{name: $n}')")
+    ;;
   status)
     name="${1:-}"; [ -n "$name" ] || die "usage: sdf.sh status <name>"
     (cd "$cp_dir" && npx convex run cli:status "$(jq -cn --arg n "$name" '{name: $n}')")
     ;;
-  *) die "usage: sdf.sh create <spec.json> [--start] | status <name>" ;;
+  *) die "usage: sdf.sh create <spec.json> [--start] | status <name> | retry <name>" ;;
 esac
