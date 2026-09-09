@@ -278,3 +278,13 @@ export const running = query({
     return runs.filter((r) => r.machinistJobId !== undefined).map((r) => ({ runId: r._id, machinistJobId: r.machinistJobId as string }));
   },
 });
+
+/** One run, for the bridge to consult the foreman's state comment on completion. */
+export const runById = query({
+  args: { secret: v.string(), runId: v.id("runs") },
+  handler: async (ctx, { secret, runId }) => {
+    requireBridge(secret);
+    const run = await ctx.db.get(runId);
+    return run ? { command: run.command, ref: run.ref ?? null, stage: run.stage } : null;
+  },
+});

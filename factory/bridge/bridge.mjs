@@ -88,6 +88,17 @@ function readEvents(machinistRunId) {
   return j.stdout;
 }
 
+// The foreman records its PR in the issue's state comment; that is authoritative, the output is not
+// (it also lists other open PRs while taking inventory).
+function prFromForemanState(ref) {
+  const m = ref?.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/(\d+)$/);
+  if (!m) return undefined;
+  const r = sh("gh", ["api", `repos/${m[1]}/issues/${m[2]}/comments`, "--paginate", "--jq", '.[] | select(.body | contains("machinist:foreman-state")) | .body']);
+  if (!r.ok) return undefined;
+  const pr = [...r.stdout.matchAll(/\*\*Pull request:\*\*\s*(https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/(\d+))/g)].pop();
+  return pr ? Number(pr[2]) : undefined;
+}
+
 function parseOutput(text) {
   const lines = text.split("\n");
   const resultLine = [...lines].reverse().find((l) => /^(RESULT|DEPLOY_RESULT|ASSESS_RESULT|GREPTILE_FIX|TRIAGE) /.test(l));
@@ -109,7 +120,10 @@ async function reconcileRuns() {
     }
     if (["succeeded", "failed", "cancelled", "timed_out"].includes(job.state)) {
       const out = mrun ? readEvents(mrun.id) : "";
-      const { resultLine, pr, sha } = parseOutput(out);
+      const parsed = parseOutput(out);
+      const resultLine = parsed.resultLine, sha = parsed.sha;
+      const run = await convex.query(api.bridge.runById, { secret, runId }).catch(() => null);
+      const pr = (run?.command === "foreman" ? prFromForemanState(run.ref) : undefined) ?? parsed.pr;
       const tokenUsage = mrun ? readTokenUsage(mrun.id) : undefined;
       const state = job.state === "succeeded" ? "succeeded" : job.state === "cancelled" ? "cancelled" : job.state === "timed_out" ? "timed_out" : "failed";
       await convex.mutation(api.bridge.complete, {
