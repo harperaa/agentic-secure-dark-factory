@@ -87,6 +87,13 @@ export const onRunCompleted = internalMutation({
     }
     const result = parseResultLine(run.resultLine);
 
+    // A run that completes after the project already left its stage (a duplicate retry, a
+    // resubmission) must not drive transitions twice. Record it and stop.
+    if (run.stage !== project.stage && !(run.stage === "BUILD" && project.stage === "REVIEW_LOOP") && !(run.stage === "MAINTAIN" && project.stage === "REVIEW_LOOP")) {
+      await ctx.db.insert("events", { projectId: project._id, runId, at: Date.now(), actor: "system", action: "run.stale", after: { runStage: run.stage, projectStage: project.stage } });
+      return;
+    }
+
     // Failure handling (design §11): one automatic retry, then NEEDS_HUMAN.
     if (run.state !== "succeeded") {
       const credential = /credential|MISSING_ENV|auth/i.test(run.error ?? run.resultLine ?? "");
