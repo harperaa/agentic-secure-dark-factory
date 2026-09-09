@@ -20,6 +20,7 @@ expected_fresh="GENESIS clone started
 GENESIS clone passed
 GENESIS npm-ci started
 GENESIS npm-ci passed
+GENESIS audit-fix skipped
 GENESIS doppler-bootstrap started
 GENESIS doppler-bootstrap passed
 GENESIS init started
@@ -83,6 +84,7 @@ assert_eq "$(git -C "$prod" remote get-url upstream)" "$SVCOS_TEMPLATE_URL" "tem
 out=$(run_genesis "$(spec_json g1)")
 expected_rerun="GENESIS clone skipped
 GENESIS npm-ci skipped
+GENESIS audit-fix skipped
 GENESIS doppler-bootstrap skipped
 GENESIS init skipped
 GENESIS modules started
