@@ -256,7 +256,9 @@ export const gateSync = mutation({
     };
     const patch = { ...(headSha === undefined ? {} : { headSha }), ci, review, updatedAt: now };
     if (existing) {
-      const changed = JSON.stringify({ ci: existing.ci, s: existing.review?.score, u: existing.review?.unresolvedComments }) !== JSON.stringify({ ci, s: reviewScore, u: unresolvedComments });
+      const norm = (list: Array<{ name: string; conclusion: string; required?: boolean }> | undefined) =>
+        [...(list ?? [])].sort((a, b) => a.name.localeCompare(b.name)).map((c) => `${c.name}:${c.conclusion}:${c.required === true}`).join("|");
+      const changed = JSON.stringify({ ci: norm(existing.ci), s: existing.review?.score, u: existing.review?.unresolvedComments, h: existing.headSha }) !== JSON.stringify({ ci: norm(ci), s: reviewScore, u: unresolvedComments, h: headSha ?? existing.headSha });
       await ctx.db.patch(existing._id, changed ? patch : { updatedAt: existing.updatedAt });
       if (changed) {
         await ctx.scheduler.runAfter(0, internal.gates.evaluate, { projectId });
