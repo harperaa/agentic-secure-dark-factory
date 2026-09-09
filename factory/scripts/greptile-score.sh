@@ -28,6 +28,11 @@ newest=$(jq -cn --argjson r "${review:-null}" --argjson s "${summary:-null}" '
 score=$(printf '%s' "$newest" | jq -r '.body' | grep -oE 'Confidence Score:?\s*[0-5]\s*/\s*5' | grep -oE '[0-5]' | head -n 1 || true)
 comments=$(gh api "repos/$repo/pulls/$pr/comments" --paginate \
   --jq '[.[] | select(.user.login == $ENV.GREPTILE_BOT_LOGIN) | {id, path, line, body, in_reply_to_id}]')
+# Thread resolution is a GraphQL property, not visible in the REST comment list.
+owner="${repo%%/*}"; name="${repo#*/}"
+unresolved=$(gh api graphql -f query="{ repository(owner:\"$owner\", name:\"$name\") { pullRequest(number:$pr) { reviewThreads(first:100) { nodes { isResolved comments(first:1) { nodes { author { login } } } } } } } }" \
+  --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select((.isResolved|not) and .comments.nodes[0].author.login == $ENV.GREPTILE_BOT_LOGIN)] | length' 2>/dev/null || echo 0)
 
-jq -cn --arg score "$score" --argjson review "${review:-null}" --argjson summary "${summary:-null}" --argjson comments "$comments" \
-  '{score: (if $score == "" then null else ($score | tonumber) end), review_id: ($review.id // $summary.id // null), submitted_at: ($review.submitted_at // $summary.created_at // null), comments: $comments}'
+scored_at=$(printf '%s' "$newest" | jq -r '.at // ""')
+jq -cn --arg score "$score" --arg scored_at "$scored_at" --argjson unresolved "${unresolved:-0}" --argjson review "${review:-null}" --argjson summary "${summary:-null}" --argjson comments "$comments" \
+  '{score: (if $score == "" then null else ($score | tonumber) end), scored_at: (if $scored_at == "" then null else $scored_at end), unresolved: $unresolved, review_id: ($review.id // $summary.id // null), submitted_at: ($review.submitted_at // $summary.created_at // null), comments: $comments}'

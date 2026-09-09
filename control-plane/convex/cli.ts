@@ -250,3 +250,17 @@ export const cancelByJob = internalMutation({
     return { cancelled: true };
   },
 });
+
+/** Re-attach a Machinist job to its run (state running) so the guard and the bridge track it again. */
+export const retrackJob = internalMutation({
+  args: { machinistJobId: v.string() },
+  handler: async (ctx, { machinistJobId }) => {
+    const run = await ctx.db.query("runs").withIndex("by_machinist_job", (q) => q.eq("machinistJobId", machinistJobId)).unique();
+    if (!run) {
+      throw new Error(`no run for job ${machinistJobId}`);
+    }
+    await ctx.db.patch(run._id, { state: "running", error: undefined, completedAt: undefined });
+    await ctx.db.insert("events", { projectId: run.projectId, runId: run._id, at: Date.now(), actor: "cli:operator", action: "run.retrack", after: { machinistJobId } });
+    return { runId: run._id, command: run.command };
+  },
+});
