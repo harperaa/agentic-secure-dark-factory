@@ -81,6 +81,26 @@ Docker sandbox backend; the local runtime does not need it. If the host kills th
 mid-run, Machinist's lease expires and the job is re-leased; the foreman resumes from its state
 comment. If the bridge is killed, restart it; it re-tracks running runs on start.
 
+## Greptile
+
+Install the Greptile GitHub App once for the GitHub account. Two scopes are possible, and the
+choice is a data-processing decision because Greptile reads the content of every repository it is
+installed on:
+
+- **Selected repositories**: add each product repository after genesis. Nothing else on the account
+  is exposed, and EU-profile products can be excluded until their data-processing check is done.
+  This is a manual step per product; genesis prints a reminder.
+- **All repositories** with "auto-enable on new repositories": every product is connected the moment
+  genesis creates it, but so is every other present and future repository on the account. Use it
+  only on an account that holds nothing but factory products.
+
+Greptile retired its manual indexing API in 2026, so there is no per-product API step either way. The
+gate reads the reviewer's confidence score from its summary comment or review. A product without the
+App must set `providers.review` to `none` explicitly (CI-only gate, never auto-merges); there is no
+automatic fallback, and a product left on `greptile` without the App waits on a review that never
+arrives and raises an unblock decision after twenty minutes. `GREPTILE_API_KEY` in the factory's
+Doppler dev config is optional and only used for Greptile's codebase Q&A API.
+
 ## Tools worth installing
 
 - `detect-secrets` (`python3 -m venv ~/.local/share/asdf-tools && ~/.local/share/asdf-tools/bin/pip install detect-secrets==1.5.0`, then symlink the two binaries into `~/.local/bin`): genesis seeds each product's secrets baseline from a real scan when it is on PATH; otherwise the product's first PR fails its `secrets` check on template example strings.
