@@ -72,6 +72,20 @@ else
   log $STAGE npm-ci passed
 fi
 
+# --- 2b. Known advisories in the template lockfile (SVCOS issue #9) -------------------------
+# A fresh product must not start with a failing required `security` check. `npm audit fix`
+# honours the product's .npmrc cooldown; anything it cannot fix stays visible in CI.
+if npm audit --audit-level=high >/dev/null 2>&1; then
+  log $STAGE audit-fix skipped
+else
+  log $STAGE audit-fix started
+  if npm audit fix --no-audit --no-fund >/dev/null 2>&1 && npm audit --audit-level=high >/dev/null 2>&1; then
+    log $STAGE audit-fix passed
+  else
+    log $STAGE audit-fix failed reason=advisories-remain
+  fi
+fi
+
 # --- 3. Secrets broker --------------------------------------------------------------------
 step=$(secrets_step_name bootstrap)
 if secrets_bootstrapped; then
