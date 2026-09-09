@@ -10,6 +10,7 @@
 
 import type * as alerts from "../alerts.js";
 import type * as bridge from "../bridge.js";
+import type * as cli from "../cli.js";
 import type * as decisions from "../decisions.js";
 import type * as events from "../events.js";
 import type * as factory from "../factory.js";
@@ -38,6 +39,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   alerts: typeof alerts;
   bridge: typeof bridge;
+  cli: typeof cli;
   decisions: typeof decisions;
   events: typeof events;
   factory: typeof factory;
