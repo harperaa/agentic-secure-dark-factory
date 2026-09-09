@@ -1,9 +1,11 @@
 import { HeroHeader } from "./header";
+import { FloorRedirect } from "./floor-redirect";
 // modules:imports
 
 export default function Home() {
   return (
     <div>
+      <FloorRedirect />
       <HeroHeader />
       <main className="flex min-h-screen flex-col items-center justify-center px-6 text-center">
         <h1 className="text-4xl font-semibold lg:text-5xl">

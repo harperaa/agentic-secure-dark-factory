@@ -22,7 +22,17 @@ async function getHandler() {
   await ensureSecretsLoaded()
 
   const { clerkMiddleware, createRouteMatcher } = await import('@clerk/nextjs/server')
-  const isProtectedRoute = createRouteMatcher(['/dashboard(.*)'])
+  const isProtectedRoute = createRouteMatcher([
+    '/dashboard(.*)',
+    // Agentic Secure Dark Factory operator screens
+    '/floor(.*)',
+    '/projects(.*)',
+    '/runs(.*)',
+    '/decisions(.*)',
+    '/audit(.*)',
+    '/settings(.*)',
+    '/spec(.*)',
+  ])
 
   cachedHandler = clerkMiddleware(async (auth, req) => {
     if (isProtectedRoute(req)) await auth.protect()
