@@ -39,6 +39,9 @@ type GitHubEvent = {
   pull_request?: { number: number; html_url: string; merged?: boolean; head?: { sha: string } };
   review?: { user?: { login: string }; body?: string };
   check_suite?: { conclusion?: string | null; head_sha?: string; pull_requests?: Array<{ number: number }> };
+  release?: { tag_name: string };
+  ref?: string;
+  ref_type?: string;
 };
 
 function parseScore(body: string | undefined): number | null {
@@ -78,6 +81,15 @@ export const githubWebhook = httpAction(async (ctx, request) => {
     // Human-opened PRs in maintenance are triaged like issues; foreman PRs are tracked via runs.
     await ctx.runMutation(internal.stateMachine.onIssueOpened, { repo, url: evt.pull_request.html_url });
     return new Response("queued", { status: 202 });
+  }
+
+  if (eventName === "release" && evt.action === "published" && evt.release) {
+    await ctx.runMutation(internal.stateMachine.onRelease, { repo, tag: evt.release.tag_name });
+    return new Response("release", { status: 202 });
+  }
+  if (eventName === "create" && evt.ref_type === "tag" && evt.ref) {
+    await ctx.runMutation(internal.stateMachine.onRelease, { repo, tag: evt.ref });
+    return new Response("tag", { status: 202 });
   }
 
   if (eventName === "pull_request_review" && evt.review?.user?.login === reviewerBot && evt.pull_request) {

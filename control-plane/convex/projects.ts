@@ -128,10 +128,10 @@ export const setMode = mutation({
       const checklist = await ctx.db
         .query("decisions")
         .withIndex("by_project_status", (q) => q.eq("projectId", projectId).eq("status", "resolved"))
-        .filter((q) => q.eq(q.field("kind"), "provision"))
+        .filter((q) => q.eq(q.field("kind"), "dark-mode-checklist"))
         .first();
-      if (!checklist) {
-        throw new Error("dark mode requires the dark-mode checklist decision to be resolved first");
+      if (!checklist || checklist.note === undefined || checklist.note.trim() === "") {
+        throw new Error("dark mode requires the dark-mode checklist decision to be resolved with a note first");
       }
     }
     const now = Date.now();
@@ -145,5 +145,40 @@ export const setMode = mutation({
       after: { mode },
       ...(note === undefined ? {} : { note }),
     });
+  },
+});
+
+/** Open the dark-mode checklist as a decision; resolving it with a note is the precondition for dark mode. */
+export const requestDarkMode = mutation({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, { projectId }) => {
+    const actor = await requireOperator(ctx);
+    const project = await ctx.db.get(projectId);
+    if (!project || !project.repo) {
+      throw new Error("project has no repository yet");
+    }
+    const open = await ctx.db
+      .query("decisions")
+      .withIndex("by_project_status", (q) => q.eq("projectId", projectId).eq("status", "open"))
+      .filter((q) => q.eq(q.field("kind"), "dark-mode-checklist"))
+      .first();
+    if (open) {
+      return open._id;
+    }
+    const now = Date.now();
+    const id = await ctx.db.insert("decisions", {
+      projectId,
+      kind: "dark-mode-checklist",
+      title: `Enable dark mode for ${project.name}? Confirm every item in the checklist and record your acceptance as the note.`,
+      evidence: [
+        { label: "Dark-mode checklist", url: "https://github.com/harperaa/agentic-secure-dark-factory/blob/main/docs/security/dark-mode-checklist.md" },
+        { label: "Branch protection", url: `https://github.com/${project.repo}/settings/branches` },
+        { label: "Security findings", url: `https://github.com/${project.repo}/issues?q=label%3Afactory%3Asecurity-finding+is%3Aopen` },
+      ],
+      status: "open",
+      createdAt: now,
+    });
+    await ctx.db.insert("events", { projectId, at: now, actor, action: "decision.dark-mode-checklist.open" });
+    return id;
   },
 });

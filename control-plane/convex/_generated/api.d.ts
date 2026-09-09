@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as alerts from "../alerts.js";
 import type * as bridge from "../bridge.js";
 import type * as decisions from "../decisions.js";
 import type * as events from "../events.js";
@@ -34,6 +35,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  alerts: typeof alerts;
   bridge: typeof bridge;
   decisions: typeof decisions;
   events: typeof events;

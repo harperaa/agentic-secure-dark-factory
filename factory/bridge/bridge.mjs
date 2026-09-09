@@ -59,6 +59,26 @@ async function submitRun(run) {
   log("submit", "passed", `run=${run._id} job=${id} command=${run.command}`);
 }
 
+function readTokenUsage(machinistRunId) {
+  const r = sh("bash", ["-c", `ls -d ${machinistHome}/worker/runs/${machinistRunId}/lease_* 2>/dev/null | head -1`]);
+  const dir = r.stdout.trim();
+  if (!dir) return undefined;
+  try {
+    const result = JSON.parse(readFileSync(`${dir}/result.json`, "utf8"));
+    const u = result.token_usage ?? result.usage ?? result.tokens;
+    if (!u || typeof u !== "object") return undefined;
+    const num = (x) => (typeof x === "number" ? x : undefined);
+    const input = num(u.input_tokens ?? u.input ?? u.prompt_tokens);
+    const output = num(u.output_tokens ?? u.output ?? u.completion_tokens);
+    if (input === undefined || output === undefined) return undefined;
+    const cacheRead = num(u.cache_read_input_tokens ?? u.cache_read);
+    const cacheWrite = num(u.cache_creation_input_tokens ?? u.cache_write);
+    return { input, output, ...(cacheRead === undefined ? {} : { cacheRead }), ...(cacheWrite === undefined ? {} : { cacheWrite }) };
+  } catch {
+    return undefined;
+  }
+}
+
 function readEvents(machinistRunId) {
   // Machinist stores events per run under the worker data directory; find by run id.
   const r = sh("bash", ["-c", `ls -d ${machinistHome}/worker/runs/${machinistRunId}/lease_* 2>/dev/null | head -1`]);
@@ -90,6 +110,7 @@ async function reconcileRuns() {
     if (["succeeded", "failed", "cancelled", "timed_out"].includes(job.state)) {
       const out = mrun ? readEvents(mrun.id) : "";
       const { resultLine, pr, sha } = parseOutput(out);
+      const tokenUsage = mrun ? readTokenUsage(mrun.id) : undefined;
       const state = job.state === "succeeded" ? "succeeded" : job.state === "cancelled" ? "cancelled" : job.state === "timed_out" ? "timed_out" : "failed";
       await convex.mutation(api.bridge.complete, {
         secret,
@@ -100,6 +121,7 @@ async function reconcileRuns() {
         ...(resultLine ? { resultLine } : {}),
         ...(sha ? { headSha: sha } : {}),
         ...(pr === undefined ? {} : { pr }),
+        ...(tokenUsage ? { tokenUsage } : {}),
       });
       tracked.delete(runId);
       log("complete", state, `run=${runId} job=${jobId}${pr ? ` pr=${pr}` : ""}`);

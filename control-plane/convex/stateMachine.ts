@@ -57,6 +57,7 @@ async function enqueue(ctx: MutationCtx, project: Project, stage: Project["stage
 
 async function stop(ctx: MutationCtx, project: Project, run: Doc<"runs">, title: string, kind: "unblock" | "provision" | "accept-finding" = "unblock") {
   await transition(ctx, project, "NEEDS_HUMAN", run._id, { reason: title });
+  await ctx.scheduler.runAfter(0, internal.alerts.notify, { title: `${project.name}: stopped`, text: title, ...(run.ref ? { url: run.ref } : {}) });
   await ctx.db.insert("decisions", {
     projectId: project._id,
     runId: run._id,
@@ -251,5 +252,25 @@ export const onIssueOpened = internalMutation({
       throw new Error("MISSING_ENV MACHINIST_REQUEST_LABEL");
     }
     await enqueue(ctx, project, "TRIAGE", "triage", `--ref=${url} --mode=${project.mode} --forced-gray-paths=${project.forcedGrayPaths.join(",")} --request-label=${requestLabel}`, url);
+  },
+});
+
+/** A major release (tag matching the project's release policy, or the release label) re-runs the full assessment. */
+export const onRelease = internalMutation({
+  args: { repo: v.string(), tag: v.string(), labels: v.optional(v.array(v.string())) },
+  handler: async (ctx, { repo, tag, labels }) => {
+    const project = await ctx.db.query("projects").withIndex("by_repo", (q) => q.eq("repo", repo)).unique();
+    if (!project || project.stage !== "MAINTAIN") {
+      return;
+    }
+    const policy = (project.spec as { release_policy?: { major_tag_pattern?: string; label?: string } }).release_policy ?? {};
+    const pattern = new RegExp(policy.major_tag_pattern ?? "^v[0-9]+\\.0\\.0$");
+    const isMajor = pattern.test(tag) || (labels ?? []).includes(policy.label ?? "release:major");
+    if (!isMajor) {
+      return;
+    }
+    const a = spec(project).assessment ?? {};
+    await transition(ctx, project, "ASSESS", undefined, { mode: "reassessment", tag });
+    await enqueue(ctx, project, "ASSESS", "assess", `--mode=reassessment --deepsec=${a.deepsec ?? "auto"} --baseline=${a.baseline_path ?? "security_context/accepted.json"} --max-new-medium=${a.max_new_medium ?? 0}`, `https://github.com/${repo}/releases/tag/${tag}`);
   },
 });

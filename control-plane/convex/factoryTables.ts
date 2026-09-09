@@ -183,6 +183,7 @@ export const factoryTables = {
       v.literal("accept-finding"),
       v.literal("unblock"),
       v.literal("provision"),
+      v.literal("dark-mode-checklist"),
     ),
     title: v.string(), // plain language, e.g. "Merge PR #43 into main?"
     evidence: v.array(v.object({ label: v.string(), url: v.string() })),

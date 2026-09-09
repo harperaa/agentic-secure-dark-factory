@@ -97,6 +97,11 @@ export const evaluate = internalMutation({
     const round = (project.repairRound ?? 0) + 1;
     if (round > project.maxRepairRounds || ciFailed) {
       await ctx.db.patch(projectId, { stage: "NEEDS_HUMAN", updatedAt: now });
+      await ctx.scheduler.runAfter(0, internal.alerts.notify, {
+        title: `${project.name}: stopped`,
+        text: ciFailed ? `CI failed on PR #${project.currentPr}` : `PR #${project.currentPr} did not reach ${project.greptileThreshold}/5 after ${project.maxRepairRounds} rounds`,
+        url: `https://github.com/${project.repo}/pull/${project.currentPr}`,
+      });
       await ctx.db.insert("decisions", {
         projectId,
         kind: "unblock",
