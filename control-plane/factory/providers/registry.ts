@@ -86,7 +86,7 @@ export const PROFILE_DEFAULTS: Record<Profile, Record<ProviderKind, string>> = {
   default: {
     hosting: "vercel",
     identity: "clerk",
-    secrets: "doppler",
+    secrets: "doppler", // pragma: allowlist secret
     backend: "convex-cloud",
     payments: "clerk-billing",
     sandbox: "local",
