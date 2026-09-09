@@ -171,6 +171,26 @@ log $STAGE generated-files started
 "$SCRIPT_DIR/apply-generated.sh" "$target"
 log $STAGE generated-files passed
 
+# --- 8b. Secrets baseline from a real scan (the seed file only carries the exclude rules) ---
+# The template ships example strings in app code that only a scan can baseline; without it
+# the product's required `secrets` check fails on its first PR.
+if command -v detect-secrets >/dev/null 2>&1; then
+  log $STAGE secrets-baseline started
+  excludes=$(jq -r '.filters_used[] | select(.path | test("should_exclude_file")) | .pattern[]' .secrets.baseline 2>/dev/null)
+  args=()
+  while IFS= read -r pat; do [ -n "$pat" ] && args+=(--exclude-files "$pat"); done <<<"$excludes"
+  args+=(--exclude-files '\.secrets\.baseline$')
+  if git ls-files -z | xargs -0 detect-secrets scan "${args[@]}" > .secrets.baseline.new 2>/dev/null && jq -e . .secrets.baseline.new >/dev/null 2>&1; then
+    mv .secrets.baseline.new .secrets.baseline
+    log $STAGE secrets-baseline passed baselined="$(jq '[.results[] | length] | add // 0' .secrets.baseline)"
+  else
+    rm -f .secrets.baseline.new
+    log $STAGE secrets-baseline failed reason=scan-error
+  fi
+else
+  log $STAGE secrets-baseline skipped reason=detect-secrets-not-installed
+fi
+
 # --- 9. Source repository (creates, sets origin, pushes main) -----------------------------
 if scm_has_repo "$owner" "$name"; then
   log $STAGE github-setup skipped origin="$(git remote get-url origin)"
