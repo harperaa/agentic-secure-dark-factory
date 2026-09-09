@@ -222,24 +222,43 @@ async function syncGates() {
     const view = sh("gh", ["pr", "view", String(t.pr), "--repo", t.repo, "--json", "headRefOid,files,labels"]);
     const v = view.ok ? JSON.parse(view.stdout) : {};
     const score = sh(path.join(factoryRoot, "factory/scripts/greptile-score.sh"), [t.repo, String(t.pr)]);
-    const sc = score.ok ? JSON.parse(score.stdout) : { score: null, comments: [] };
+    const sc = score.ok ? JSON.parse(score.stdout) : { score: null, comments: [], unresolved: 0, scored_at: null };
+    // Greptile reviews on push, but not always; when the newest score predates the head commit, ask once per head.
+    const head = sh("gh", ["api", `repos/${t.repo}/commits/${v.headRefOid}`, "--jq", ".commit.committer.date"]);
+    const headAt = head.ok ? Date.parse(head.stdout.trim()) : NaN;
+    const scoredAt = sc.scored_at ? Date.parse(sc.scored_at) : NaN;
+    const stale = Number.isFinite(headAt) && (!Number.isFinite(scoredAt) || scoredAt < headAt);
+    // The once-per-head marker is stored on the gate row (reviewRequestedHead), so a bridge restart
+    // does not post a second mention for the same head.
+    let reviewRequestedHead = t.reviewRequestedHead ?? undefined;
+    if (stale && v.headRefOid && reviewRequestedHead !== v.headRefOid && Date.now() - headAt > 3 * 60_000) {
+      const mention = process.env.GREPTILE_REVIEW_MENTION ?? "@greptileai review";
+      const c = sh("gh", ["pr", "comment", String(t.pr), "--repo", t.repo, "--body", mention]);
+      if (c.ok) { reviewRequestedHead = v.headRefOid; log("review-request", "passed", `repo=${t.repo} pr=${t.pr} head=${v.headRefOid.slice(0, 8)}`); }
+    }
     await convex.mutation(api.bridge.gateSync, {
       secret,
       projectId: t.projectId,
       pr: t.pr,
       ...(v.headRefOid ? { headSha: v.headRefOid } : {}),
       ci,
-      reviewScore: sc.score ?? null,
-      unresolvedComments: (sc.comments ?? []).filter((c) => !c.in_reply_to_id).length,
+      reviewScore: stale ? null : (sc.score ?? null),
+      unresolvedComments: typeof sc.unresolved === "number" ? sc.unresolved : (sc.comments ?? []).filter((c) => !c.in_reply_to_id).length,
       changedPaths: (v.files ?? []).map((f) => f.path),
       labels: (v.labels ?? []).map((l) => l.name),
+      ...(reviewRequestedHead ? { reviewRequestedHead } : {}),
     });
-    log("gate-sync", "passed", `repo=${t.repo} pr=${t.pr} ci=${ci.length} required=${ci.filter((c) => c.required).length} score=${sc.score ?? "none"}`);
+    log("gate-sync", "passed", `repo=${t.repo} pr=${t.pr} ci=${ci.length} required=${ci.filter((c) => c.required).length} score=${stale ? "stale" : (sc.score ?? "none")} unresolved=${typeof sc.unresolved === "number" ? sc.unresolved : "?"}`);
   }
 }
 
 // --- loop -----------------------------------------------------------------------------------
 async function tick() {
+  // Re-attach any run the control plane considers running that this process is not tracking
+  // (a retracked job, or a run submitted before a restart).
+  for (const r of await convex.query(api.bridge.running, { secret })) {
+    if (!tracked.has(r.runId)) tracked.set(r.runId, { jobId: r.machinistJobId });
+  }
   const { runs, effects } = await convex.query(api.bridge.pollQueued, { secret });
   for (const run of runs) {
     if (!tracked.has(run._id)) await submitRun(run);

@@ -154,6 +154,7 @@ export const factoryTables = {
       }),
     ),
     verdict: v.union(v.literal("pending"), v.literal("pass"), v.literal("fail")),
+    reviewRequestedHead: v.optional(v.string()), // head sha a re-review was requested for (bridge, once per head)
     updatedAt: v.number(),
   })
     .index("by_run", ["runId"])
