@@ -236,3 +236,17 @@ export const cancelQueued = internalMutation({
     return { cancelled };
   },
 });
+
+/** Mark a run cancelled by its Machinist job id (after the job was deleted from Machinist). */
+export const cancelByJob = internalMutation({
+  args: { machinistJobId: v.string() },
+  handler: async (ctx, { machinistJobId }) => {
+    const run = await ctx.db.query("runs").withIndex("by_machinist_job", (q) => q.eq("machinistJobId", machinistJobId)).unique();
+    if (!run || (run.state !== "queued" && run.state !== "running")) {
+      return { cancelled: false };
+    }
+    await ctx.db.patch(run._id, { state: "cancelled", completedAt: Date.now(), error: "cancelled by the operator (duplicate)" });
+    await ctx.db.insert("events", { projectId: run.projectId, runId: run._id, at: Date.now(), actor: "cli:operator", action: "run.cancel", after: { machinistJobId } });
+    return { cancelled: true };
+  },
+});
