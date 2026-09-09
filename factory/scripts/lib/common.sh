@@ -80,14 +80,67 @@ last_json_line() {
   printf '%s\n' "$text" | tail -n +"$start" | jq -c . 2>/dev/null || true
 }
 
-# get_setting KEY — print a non-secret setting's value from Doppler dev or .env.local.
-get_setting() {
-  local key="$1"
-  if [ -f .doppler.yaml ]; then
-    doppler secrets get "$key" --plain 2>/dev/null || true
-  else
-    grep -s "^$key=" .env.local | cut -d= -f2- || true
+# run_svcos STEP cmd... — run an SVCOS script, always print its output, and fail the stage
+# with ERROR step=... when it exits non-zero or reports {"success": false}. SVCOS subcommands
+# fail both ways (process.exit(1) and success:false with exit 0). The compact final JSON is left
+# in SVCOS_JSON for the caller.
+run_svcos() {
+  local step="$1" out rc=0
+  shift
+  out=$("$@" 2>&1) || rc=$?
+  [ -n "$out" ] && printf '%s\n' "$out"
+  SVCOS_JSON=$(last_json_line "$out")
+  if [ "$rc" -ne 0 ]; then
+    printf 'ERROR step=%s reason=%s exit=%s\n' "$step" \
+      "$(jq -r '.error // .message // "exit-status"' <<<"${SVCOS_JSON:-{\}}")" "$rc" >&2
+    exit 1
   fi
+  assert_success "$SVCOS_JSON" "$step"
+}
+
+# env_local_get KEY — value of KEY in .env.local, or nothing.
+env_local_get() {
+  grep -s "^$1=" .env.local | cut -d= -f2- || true
+}
+
+# doppler_get KEY [CONFIG] — a secret's value from Doppler, empty when the secret does not exist.
+# Any other failure (expired login, unreachable API, no scope) is fatal: treating it as "not
+# configured" would make re-runs fail open and create duplicate resources.
+doppler_get() {
+  local key="$1" config="${2:-dev}" out rc=0
+  out=$(doppler secrets get "$key" --plain --config "$config" 2>&1) || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    printf '%s' "$out"
+  elif printf '%s' "$out" | grep -q 'Could not find requested secret'; then
+    return 0
+  else
+    printf 'ERROR step=doppler-get reason=%s\n' "$(printf '%s' "$out" | tr -d '\033' | sed 's/\[[0-9;]*m//g' | tr '\n' ' ')" >&2
+    exit 1
+  fi
+}
+
+# doppler_check — once per process, require the CLI and a reachable, logged-in Doppler.
+doppler_check() {
+  [ -n "${DOPPLER_CHECKED:-}" ] && return 0
+  require_cmd doppler
+  doppler me >/dev/null 2>&1 || { printf 'ERROR step=doppler-check reason=not-logged-in-or-unreachable\n' >&2; exit 1; }
+  DOPPLER_CHECKED=1
+}
+
+# get_setting KEY — print a non-secret setting's value. With a secrets adapter loaded
+# (factory/providers/load.sh) it forwards there; otherwise Doppler dev, then .env.local.
+get_setting() {
+  local key="$1" value=""
+  if declare -F secrets_get >/dev/null; then
+    secrets_get "$key"
+    return 0
+  fi
+  if [ -f .doppler.yaml ]; then
+    doppler_check
+    value=$(doppler_get "$key")
+  fi
+  [ -n "$value" ] || value=$(env_local_get "$key")
+  printf '%s' "$value"
 }
 
 # assert_success JSON STEP — SVCOS scripts exit 0 even when they report {"success": false};
@@ -110,9 +163,9 @@ assert_success() {
 # config when the repo is in Doppler mode (.doppler.yaml), otherwise in .env.local.
 has_setting() {
   local key="$1"
-  if [ -f .doppler.yaml ]; then
-    [ -n "$(doppler secrets get "$key" --plain 2>/dev/null || true)" ]
+  if declare -F secrets_has >/dev/null; then
+    secrets_has "$key"
   else
-    grep -qs "^$key=" .env.local
+    [ -n "$(get_setting "$key")" ]
   fi
 }

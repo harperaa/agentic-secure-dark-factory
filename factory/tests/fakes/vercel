@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Fake `vercel` CLI for adapter contract tests (reached through the fake npx).
+set -euo pipefail
+printf 'vercel %s\n' "$*" >> "${FAKE_LOG:-/dev/null}"
+case "${1:-}" in
+  project) exit 0 ;;
+  link)
+    mkdir -p .vercel
+    printf '{"projectId":"prj_fake","orgId":"team_fake"}\n' > .vercel/project.json ;;
+  git) exit 0 ;;
+  promote) exit 0 ;;
+  whoami) printf 'fakeuser\n' ;;
+  teams) printf 'id      Team name\nfake-team   Fake Team\n' ;;
+  --version) printf '0.0.0-fake\n' ;;
+  *) printf 'fake vercel: unhandled %s\n' "$*" >&2; exit 99 ;;
+esac

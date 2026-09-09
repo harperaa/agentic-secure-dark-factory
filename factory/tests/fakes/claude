@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Fake `claude` so the llm/anthropic adapter's needs_cmd is satisfied on hosts (CI) without the
+# real CLI. Genesis never invokes a model; the gate only checks presence.
+set -euo pipefail
+printf 'claude %s\n' "$*" >> "${FAKE_LOG:-/dev/null}"
+case "${1:-}" in
+  --version) printf '0.0.0-fake (Claude Code)\n' ;;
+  auth) printf '{"loggedIn": true, "authMethod": "fake"}\n' ;;
+  *) printf 'fake claude: unhandled %s\n' "$*" >&2; exit 99 ;;
+esac

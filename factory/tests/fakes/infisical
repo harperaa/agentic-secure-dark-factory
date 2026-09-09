@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Fake `infisical` CLI for the secrets/infisical adapter tests. Backed by FAKE_INFISICAL_STORE.
+set -euo pipefail
+printf 'infisical %s\n' "$*" >> "${FAKE_LOG:-/dev/null}"
+store="${FAKE_INFISICAL_STORE:?FAKE_INFISICAL_STORE unset}"
+touch "$store"
+case "${1:-}" in
+  user) printf 'fake@example.test\n' ;;
+  export) cat "$store" ;;
+  secrets)
+    case "${2:-}" in
+      get)
+        key="$3"
+        value=$(grep "^$key=" "$store" | tail -n 1 | cut -d= -f2- || true)
+        [ -n "$value" ] || exit 1
+        printf '%s' "$value" ;;
+      set) printf '%s\n' "$3" >> "$store" ;;
+      *) printf 'fake infisical: unhandled %s\n' "$*" >&2; exit 99 ;;
+    esac ;;
+  *) printf 'fake infisical: unhandled %s\n' "$*" >&2; exit 99 ;;
+esac
