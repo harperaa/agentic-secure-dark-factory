@@ -119,7 +119,7 @@ the spec JSON as the prompt. See [docs/runtimes/local.md](docs/runtimes/local.md
 | M4 Gates (CI + reviewer + forced gray, repair rounds, assessment, alerts) | built; exercised through the first real decision; reviewer integration waits on the Greptile app install |
 | M5 Gray GA, M6 Dark mode | policy and checklist gate built; operational tuning pending real runs |
 | M7 EU profile | adapters written with honest `verified: false` capabilities; identity and payments refused until SVCOS modules exist |
-| M8 Upstream proposals | six issues opened on Secure Vibe Coding OS; Machinist Runtime seam drafted in `docs/upstream/` |
+| M8 Upstream proposals | done: six issues on Secure Vibe Coding OS (#5–#10) and the Machinist `Runtime` seam ([machinist#480](https://github.com/owainlewis/machinist/issues/480)) |
 
 Runtime pieces on the operator machine: `factory/scripts/start-local.sh` (Machinist), `factory/bridge/bridge.mjs` (bridge), `factory/scripts/doctor.sh` (onboarding discovery). See [docs/design.md](docs/design.md#14-milestones).
 

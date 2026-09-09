@@ -6,7 +6,7 @@ proposal lands, the factory works around it or degrades to NEEDS_HUMAN with a re
 
 | Proposal | Target | Factory workaround today |
 |---|---|---|
-| [Argument blocks on interactive commands](svcos-arguments.md) | SVCOS | factory prompts call scripts and agents directly |
-| [Optional modules: `auth-oidc`, `payments-mollie`, `payments-payone`](svcos-modules.md) | SVCOS | EU profile refuses identity/payments swaps |
-| [Security CI additions in `ci.yml`](svcos-security-ci.md) | SVCOS | `factory-security.yml` written into each product repo |
-| [`Runtime` seam in the managed worker](machinist-runtime-seam.md) | Machinist | `sandbox-exec` wrapper executor |
+| [Argument blocks on interactive commands](svcos-arguments.md) ([SVCOS #5](https://github.com/harperaa/secure-vibe-coding-OS/issues/5)) | SVCOS | factory prompts call scripts and agents directly |
+| [Optional modules: `auth-oidc`, `payments-mollie`, `payments-payone`](svcos-modules.md) ([SVCOS #10](https://github.com/harperaa/secure-vibe-coding-OS/issues/10)) | SVCOS | EU profile refuses identity/payments swaps |
+| [Security CI additions in `ci.yml`](svcos-security-ci.md) ([SVCOS #8](https://github.com/harperaa/secure-vibe-coding-OS/issues/8); also #6, #7, #9) | SVCOS | `factory-security.yml` written into each product repo |
+| [`Runtime` seam in the managed worker](machinist-runtime-seam.md) ([owainlewis/machinist#480](https://github.com/owainlewis/machinist/issues/480)) | Machinist | `sandbox-exec` wrapper executor |
