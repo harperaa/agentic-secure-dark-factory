@@ -1,5 +1,6 @@
 import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 
 /**
  * Operator CLI path (design §13.1 `sdf`): the same actions the Spec screen performs, callable
@@ -143,5 +144,18 @@ export const setPullRequest = internalMutation({
     await ctx.db.patch(project._id, { currentPr: pr, stage: "REVIEW_LOOP", repairRound: 0, updatedAt: now });
     await ctx.db.insert("events", { projectId: project._id, at: now, actor: "cli:operator", action: "pr.set", before: { pr: project.currentPr ?? null }, after: { pr } });
     return { pr };
+  },
+});
+
+/** Operator cleared the blocker (CI fixed, review installed): re-evaluate or re-run. */
+export const unblock = internalMutation({
+  args: { name: v.string() },
+  handler: async (ctx, { name }) => {
+    const project = await ctx.db.query("projects").withIndex("by_name", (q) => q.eq("name", name)).unique();
+    if (!project) {
+      throw new Error(`no project named ${name}`);
+    }
+    await ctx.scheduler.runAfter(0, internal.stateMachine.unblock, { projectId: project._id, actor: "cli:operator" });
+    return { scheduled: true, stage: project.stage };
   },
 });

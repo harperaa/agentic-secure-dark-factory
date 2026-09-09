@@ -27,9 +27,13 @@ case "$cmd" in
     name="${1:-}"; pr="${2:-}"; [ -n "$name" ] && [ -n "$pr" ] || die "usage: sdf.sh set-pr <name> <number>"
     (cd "$cp_dir" && npx convex run cli:setPullRequest "$(jq -cn --arg n "$name" --argjson p "$pr" '{name: $n, pr: $p}')")
     ;;
+  unblock)
+    name="${1:-}"; [ -n "$name" ] || die "usage: sdf.sh unblock <name>"
+    (cd "$cp_dir" && npx convex run cli:unblock "$(jq -cn --arg n "$name" '{name: $n}')")
+    ;;
   status)
     name="${1:-}"; [ -n "$name" ] || die "usage: sdf.sh status <name>"
     (cd "$cp_dir" && npx convex run cli:status "$(jq -cn --arg n "$name" '{name: $n}')")
     ;;
-  *) die "usage: sdf.sh create <spec.json> [--start] | status <name> | retry <name> | set-pr <name> <number>" ;;
+  *) die "usage: sdf.sh create <spec.json> [--start] | status <name> | retry <name> | unblock <name> | set-pr <name> <number>" ;;
 esac

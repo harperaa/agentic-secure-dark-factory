@@ -1,6 +1,7 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { requireOperator } from "./lib/factoryAuth";
+import { internal } from "./_generated/api";
 
 export const listOpen = query({
   args: {},
@@ -79,22 +80,7 @@ export const resolve = mutation({
       }
     }
     if (decision.kind === "unblock" && choice === "primary") {
-      // Operator says the blocker is cleared: return to the stage the run belonged to and retry.
-      const run = decision.runId ? await ctx.db.get(decision.runId) : null;
-      if (run) {
-        await ctx.db.insert("runs", {
-          projectId: project._id,
-          stage: run.stage,
-          command: run.command,
-          repository: run.repository,
-          prompt: run.prompt,
-          state: "queued",
-          attempt: 1,
-          queuedAt: now,
-          ...(run.ref === undefined ? {} : { ref: run.ref }),
-        });
-        await ctx.db.patch(project._id, { stage: run.stage, retryCount: 0, updatedAt: now });
-      }
+      await ctx.scheduler.runAfter(0, internal.stateMachine.unblock, { projectId: project._id, actor });
     }
     await ctx.db.insert("events", {
       projectId: project._id,
