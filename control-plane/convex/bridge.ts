@@ -268,3 +268,13 @@ export const gateSync = mutation({
     await ctx.scheduler.runAfter(0, internal.gates.classify, { projectId, pr, changedPaths, labels });
   },
 });
+
+/** Runs the bridge already submitted (state running); re-tracked after a bridge restart. */
+export const running = query({
+  args: { secret: v.string() },
+  handler: async (ctx, { secret }) => {
+    requireBridge(secret);
+    const runs = await ctx.db.query("runs").withIndex("by_state", (q) => q.eq("state", "running")).take(50);
+    return runs.filter((r) => r.machinistJobId !== undefined).map((r) => ({ runId: r._id, machinistJobId: r.machinistJobId as string }));
+  },
+});

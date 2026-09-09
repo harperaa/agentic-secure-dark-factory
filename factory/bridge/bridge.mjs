@@ -225,6 +225,15 @@ async function tick() {
 }
 
 log("start", "passed", `convex=${process.env.CONVEX_URL} machinist=${machinistUrl} poll_ms=${pollMs}`);
+// Re-track runs submitted before a restart so their completion is still reported.
+try {
+  for (const r of await convex.query(api.bridge.running, { secret })) {
+    tracked.set(r.runId, { jobId: r.machinistJobId });
+  }
+  log("retrack", "passed", `runs=${tracked.size}`);
+} catch (err) {
+  log("retrack", "failed", `error=${String(err.message ?? err).slice(0, 200)}`);
+}
 for (;;) {
   try {
     await tick();
