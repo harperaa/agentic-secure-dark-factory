@@ -4,6 +4,7 @@ set -euo pipefail
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 source "$TESTS_DIR/lib.sh"
+fresh_sandbox
 export GREPTILE_BOT_LOGIN='greptile-apps[bot]'
 reader="$TESTS_DIR/../scripts/greptile-score.sh"
 run_case() { FAKE_GH_REVIEW_DIR="$TESTS_DIR/fixtures/review/$1" "$reader" fake/repo 1; }
