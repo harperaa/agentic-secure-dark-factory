@@ -159,3 +159,58 @@ export const unblock = internalMutation({
     return { scheduled: true, stage: project.stage };
   },
 });
+
+/** Change one provider on a project (e.g. review=none until Greptile is installed). Recorded in the audit trail. */
+export const setProvider = internalMutation({
+  args: { name: v.string(), kind: v.string(), value: v.string() },
+  handler: async (ctx, { name, kind, value }) => {
+    const project = await ctx.db.query("projects").withIndex("by_name", (q) => q.eq("name", name)).unique();
+    if (!project) {
+      throw new Error(`no project named ${name}`);
+    }
+    const allowed = ["hosting", "identity", "secrets", "backend", "payments", "sandbox", "llm", "review", "scm"];
+    if (!allowed.includes(kind)) {
+      throw new Error(`unknown provider kind ${kind}`);
+    }
+    const now = Date.now();
+    const providers = { ...project.providers, [kind]: value };
+    const spec = { ...(project.spec as Record<string, unknown>), providers: { ...((project.spec as { providers?: Record<string, unknown> }).providers ?? {}), [kind]: value } };
+    await ctx.db.patch(project._id, { providers, spec, updatedAt: now });
+    await ctx.db.insert("events", { projectId: project._id, at: now, actor: "cli:operator", action: "provider.set", before: { [kind]: (project.providers as Record<string, string | undefined>)[kind] ?? null }, after: { [kind]: value } });
+    if (project.stage === "REVIEW_LOOP") {
+      await ctx.scheduler.runAfter(0, internal.gates.evaluate, { projectId: project._id });
+    }
+    return { providers };
+  },
+});
+
+/** Resolve an open decision from the CLI (same effects as the drawer; actor cli:operator). */
+export const decide = internalMutation({
+  args: { name: v.string(), choice: v.union(v.literal("primary"), v.literal("secondary")), note: v.optional(v.string()) },
+  handler: async (ctx, { name, choice, note }) => {
+    const project = await ctx.db.query("projects").withIndex("by_name", (q) => q.eq("name", name)).unique();
+    if (!project) {
+      throw new Error(`no project named ${name}`);
+    }
+    const decision = await ctx.db.query("decisions").withIndex("by_project_status", (q) => q.eq("projectId", project._id).eq("status", "open")).order("desc").first();
+    if (!decision) {
+      return { resolved: null };
+    }
+    const now = Date.now();
+    const actor = "cli:operator";
+    await ctx.db.patch(decision._id, { status: "resolved", resolvedBy: actor, resolvedAt: now, ...(note === undefined ? {} : { note }) });
+    if (decision.kind === "apply-auto-merge" && project.repo && project.currentPr !== undefined) {
+      if (choice === "primary") {
+        await ctx.db.insert("effects", { projectId: project._id, kind: "apply-label", args: { repo: project.repo, number: project.currentPr, label: "machinist:auto-merge" }, status: "queued", createdAt: now });
+      } else {
+        await ctx.db.insert("effects", { projectId: project._id, kind: "comment", args: { repo: project.repo, number: project.currentPr, body: `Sent back by the operator.${note ? ` ${note}` : ""}` }, status: "queued", createdAt: now });
+        await ctx.db.patch(project._id, { stage: "NEEDS_HUMAN", updatedAt: now });
+      }
+    }
+    if (decision.kind === "unblock" && choice === "primary") {
+      await ctx.scheduler.runAfter(0, internal.stateMachine.unblock, { projectId: project._id, actor });
+    }
+    await ctx.db.insert("events", { projectId: project._id, at: now, actor, action: `decision.${decision.kind}`, after: { choice }, ...(note === undefined ? {} : { note }) });
+    return { resolved: decision.title, choice };
+  },
+});
