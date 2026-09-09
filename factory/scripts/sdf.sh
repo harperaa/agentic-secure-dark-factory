@@ -31,9 +31,17 @@ case "$cmd" in
     name="${1:-}"; [ -n "$name" ] || die "usage: sdf.sh unblock <name>"
     (cd "$cp_dir" && npx convex run cli:unblock "$(jq -cn --arg n "$name" '{name: $n}')")
     ;;
+  set-provider)
+    name="${1:-}"; kind="${2:-}"; value="${3:-}"; [ -n "$name" ] && [ -n "$kind" ] && [ -n "$value" ] || die "usage: sdf.sh set-provider <name> <kind> <value>"
+    (cd "$cp_dir" && npx convex run cli:setProvider "$(jq -cn --arg n "$name" --arg k "$kind" --arg v "$value" '{name: $n, kind: $k, value: $v}')")
+    ;;
+  decide)
+    name="${1:-}"; choice="${2:-}"; note="${3:-}"; [ -n "$name" ] && [ -n "$choice" ] || die "usage: sdf.sh decide <name> primary|secondary [note]"
+    (cd "$cp_dir" && npx convex run cli:decide "$(jq -cn --arg n "$name" --arg c "$choice" --arg t "$note" '{name: $n, choice: $c} + (if $t == "" then {} else {note: $t} end)')")
+    ;;
   status)
     name="${1:-}"; [ -n "$name" ] || die "usage: sdf.sh status <name>"
     (cd "$cp_dir" && npx convex run cli:status "$(jq -cn --arg n "$name" '{name: $n}')")
     ;;
-  *) die "usage: sdf.sh create <spec.json> [--start] | status <name> | retry <name> | unblock <name> | set-pr <name> <number>" ;;
+  *) die "usage: sdf.sh create <spec.json> [--start] | status <name> | retry <name> | unblock <name> | set-pr <name> <number> | set-provider <name> <kind> <value> | decide <name> primary|secondary [note]" ;;
 esac
