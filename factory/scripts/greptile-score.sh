@@ -19,7 +19,13 @@ review=$(gh api "repos/$repo/pulls/$pr/reviews" --paginate \
 # as review comments; a formal PR review is optional. Take the newest score from either place.
 summary=$(gh api "repos/$repo/issues/$pr/comments" --paginate \
   --jq '[.[] | select(.user.login == $ENV.GREPTILE_BOT_LOGIN) | select(.body | test("Confidence Score"))] | last // empty')
-score=$( { printf '%s' "$summary" | jq -r '.body // ""'; printf '%s' "$review" | jq -r '.body // ""'; } | grep -oE 'Confidence Score:?\s*[0-5]\s*/\s*5' | grep -oE '[0-5]' | head -n 1 || true)
+# Take the score from whichever of the two is newer, so a fresh review is never shadowed by an
+# older summary (or the reverse).
+newest=$(jq -cn --argjson r "${review:-null}" --argjson s "${summary:-null}" '
+  [ (if $r then {at: ($r.submitted_at // ""), body: ($r.body // "")} else empty end),
+    (if $s then {at: ($s.created_at // ""), body: ($s.body // "")} else empty end) ]
+  | sort_by(.at) | last // {body: ""}')
+score=$(printf '%s' "$newest" | jq -r '.body' | grep -oE 'Confidence Score:?\s*[0-5]\s*/\s*5' | grep -oE '[0-5]' | head -n 1 || true)
 comments=$(gh api "repos/$repo/pulls/$pr/comments" --paginate \
   --jq '[.[] | select(.user.login == $ENV.GREPTILE_BOT_LOGIN) | {id, path, line, body, in_reply_to_id}]')
 
