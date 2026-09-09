@@ -3,10 +3,15 @@
   "triggerOnUpdates": true,
   "triggerOnDrafts": false,
   "strictness": 3,
-  "commentTypes": ["logic", "syntax"],
-  "excludeAuthors": ["dependabot[bot]"],
+  "commentTypes": [
+    "logic",
+    "syntax"
+  ],
+  "excludeAuthors": [
+    "dependabot[bot]"
+  ],
   "shouldUpdateDescription": false,
   "fixWithAI": false,
-  "ignorePatterns": "greptile.json\n.claude/**\n.cursor/**\ndocs/**\ntemplates/**\nscripts/**\npublic/**\nsecurity_context/**\nsecurity_reports/**\nthreat_modeling_output/**\n**/node_modules/**\n**/*.min.js\npackage-lock.json\n.secrets.baseline",
-  "instructions": "This repository is built and maintained by an automated factory under AGENTS.md. Review for concrete bugs, security regressions (authentication, authorization, secrets, input validation, CSRF, rate limiting), and violations of AGENTS.md. Always end the summary with a line of the exact form 'Confidence Score: N/5'. Do not comment on style, formatting, or documentation wording. Treat changes under middleware.ts, convex/auth*, app/api/**, lib/security/**, package.json, and package-lock.json as high risk and say so explicitly."
+  "ignorePatterns": "greptile.json\n.claude/**\n.cursor/**\ndocs/**\ntemplates/**\npublic/**\nsecurity_context/**\nsecurity_reports/**\nthreat_modeling_output/**\n**/node_modules/**\n**/*.min.js\npackage-lock.json\n.secrets.baseline",
+  "instructions": "This repository is built and maintained by an automated factory under AGENTS.md. Review for concrete bugs, security regressions (authentication, authorization, secrets, input validation, CSRF, rate limiting), and violations of AGENTS.md. Always end the summary with a line of the exact form 'Confidence Score: N/5'. Do not comment on style, formatting, or documentation wording. Treat changes under scripts/**, middleware.ts, convex/auth*, app/api/**, lib/security/**, package.json, and package-lock.json as high risk and say so explicitly."
 }
