@@ -181,6 +181,15 @@ async function runEffect(effect) {
         result = { issues: all.length ? all : issues };
         break;
       }
+      case "reveal-claim-url": {
+        const dir = path.join(expand(process.env.FACTORY_WORKSPACE ?? ""), a.name);
+        const r = sh("doppler", ["secrets", "get", "FACTORY_CLERK_CLAIM_URL", "--plain", "--config", "dev"], { cwd: dir });
+        if (!r.ok) throw new Error(r.stderr.trim() || "doppler secrets get failed");
+        const url = r.stdout.trim();
+        if (!url) throw new Error("FACTORY_CLERK_CLAIM_URL is empty in Doppler dev");
+        result = { url };
+        break;
+      }
       case "register-repository": {
         const p = path.join(expand(process.env.FACTORY_WORKSPACE ?? ""), a.name);
         const r = sh(path.join(factoryRoot, "factory/scripts/register-repository.sh"), [a.name, p]);

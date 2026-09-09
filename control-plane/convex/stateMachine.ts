@@ -111,7 +111,6 @@ export const onRunCompleted = internalMutation({
         await ctx.db.patch(project._id, {
           ...(result["repo"] === undefined ? {} : { repo: result["repo"] }),
           ...(result["url"] === undefined ? {} : { devUrl: result["url"] }),
-          ...(result["clerk_claim_url"] === undefined ? {} : { clerkClaimUrl: result["clerk_claim_url"] }),
           updatedAt: Date.now(),
         });
         // Register the product with the worker, then create phase issues; the effect chain

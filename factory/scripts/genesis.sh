@@ -260,5 +260,5 @@ lockdown_mode=$([ "$mode" = "dark" ] && printf '%s' "$LOCKDOWN_MODE_DARK" || pri
 scm_protect "$owner/$name" "$lockdown_mode" "$FACTORY_REQUIRED_CONTEXTS"
 log $STAGE lockdown passed
 
-printf 'RESULT status=ready repo=%s/%s repo_url=%s url=%s sandbox=%s%s\n' \
-  "$owner" "$name" "$repo_url" "$url" "$sandbox" "${claim_url:+ clerk_claim_url=$claim_url}"
+printf 'RESULT status=ready repo=%s/%s repo_url=%s url=%s sandbox=%s\n' \
+  "$owner" "$name" "$repo_url" "$url" "$sandbox"

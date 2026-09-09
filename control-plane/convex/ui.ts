@@ -1,4 +1,4 @@
-import { query } from "./_generated/server";
+import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { requireOperator } from "./lib/factoryAuth";
 
@@ -129,5 +129,68 @@ export const audit = query({
       rows.push({ event, projectName });
     }
     return rows;
+  },
+});
+
+/**
+ * Clerk claim URL: kept only in the product's Doppler dev config (FACTORY_CLERK_CLAIM_URL).
+ * The operator asks for it; the bridge reads it with the worker machine's Doppler login and
+ * returns it in the effect result; the operator clears it after use.
+ */
+export const requestClaimUrl = mutation({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, { projectId }) => {
+    const actor = await requireOperator(ctx);
+    const project = await ctx.db.get(projectId);
+    if (!project) {
+      throw new Error("no such project");
+    }
+    const now = Date.now();
+    const id = await ctx.db.insert("effects", {
+      projectId,
+      kind: "reveal-claim-url",
+      args: { name: project.name },
+      status: "queued",
+      createdAt: now,
+    });
+    await ctx.db.insert("events", { projectId, at: now, actor, action: "clerk.claim-url.request" });
+    return id;
+  },
+});
+
+export const claimUrl = query({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, { projectId }) => {
+    await requireOperator(ctx);
+    const effects = await ctx.db
+      .query("effects")
+      .withIndex("by_project", (q) => q.eq("projectId", projectId))
+      .order("desc")
+      .take(20);
+    const latest = effects.find((e) => e.kind === "reveal-claim-url");
+    if (!latest) {
+      return null;
+    }
+    const result = latest.result as { url?: string; cleared?: boolean } | undefined;
+    return {
+      effectId: latest._id,
+      status: latest.status,
+      url: latest.status === "done" && result?.url && !result.cleared ? result.url : null,
+      error: latest.error ?? null,
+      at: latest.completedAt ?? latest.createdAt,
+    };
+  },
+});
+
+export const clearClaimUrl = mutation({
+  args: { effectId: v.id("effects") },
+  handler: async (ctx, { effectId }) => {
+    const actor = await requireOperator(ctx);
+    const effect = await ctx.db.get(effectId);
+    if (!effect || effect.kind !== "reveal-claim-url") {
+      return;
+    }
+    await ctx.db.patch(effectId, { result: { cleared: true } });
+    await ctx.db.insert("events", { projectId: effect.projectId, at: Date.now(), actor, action: "clerk.claim-url.clear" });
   },
 });
