@@ -75,7 +75,7 @@ export const ADAPTERS: readonly Adapter[] = [
   adapter({ kind: "llm", name: "anthropic-vertex-eu", implemented: true, verified: false, needsEnv: ["ANTHROPIC_VERTEX_PROJECT_ID", "CLOUD_ML_REGION"], optionalEnv: ["GOOGLE_APPLICATION_CREDENTIALS"], needsCmd: ["claude"], supports: ["env"], residency: "EU" }),
   adapter({ kind: "llm", name: "mistral", implemented: true, verified: false, needsEnv: ["MISTRAL_API_KEY", "MISTRAL_BASE_URL"], needsCmd: ["codex"], supports: ["env"], residency: "EU" }),
   // review
-  adapter({ kind: "review", name: "greptile", implemented: true, verified: false, needsEnv: ["GREPTILE_BOT_LOGIN"], needsCmd: ["gh"], supports: ["wait_for_review"], humanGate: "install the Greptile GitHub App on the product repository; verify data-processing terms for EU projects" }),
+  adapter({ kind: "review", name: "greptile", implemented: true, verified: false, needsEnv: ["GREPTILE_BOT_LOGIN"], needsCmd: ["gh"], supports: ["wait_for_review"], humanGate: "install the Greptile GitHub App once for the account with all repositories and auto-enable on new repositories; verify data-processing terms for EU projects" }),
   adapter({ kind: "review", name: "none", implemented: true, verified: true, needsEnv: [], needsCmd: [], supports: [], humanGate: "CI-only review gate; the control plane never auto-merges without a reviewer" }),
   adapter({ kind: "review", name: "self-hosted", implemented: false, verified: false, needsEnv: [], needsCmd: [], supports: [], reason: "self-hosted reviewer prompt not implemented; use review=greptile or build factory/commands/review.md" }),
   // scm
