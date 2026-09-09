@@ -824,6 +824,11 @@ Rule: if a change *only* makes sense inside SVCOS or Machinist, it is filed as a
 | R15 | Convex self-hosted operational burden (Postgres/SQLite backend, backups, upgrades) for EU projects. | adapter provisions via Docker Compose on Scaleway/Hetzner; document backup cadence; consider Convex's EU cloud region if/when offered |
 | R16 | Adapter drift: a provider CLI change breaks an adapter while SVCOS scripts still assume the default provider's artifacts. | adapter contract tests that assert the produced `.env.local`/`DEPLOYMENT-*.md` shape; pin CLI versions in the snapshot |
 | R17 | Local default concentrates credentials on one machine. | unprivileged user, disk encryption, secrets adapter as source of truth, `/rotate` cadence; cloud sandboxes available when the operator wants ephemeral credentials |
+| R19 | SVCOS `convex-setup` pushes functions before `configure` sets `CLERK_JWT_ISSUER_DOMAIN`, so the first push of a new Convex project can fail; the idempotent re-run recovers. | observed twice; propose ordering fix upstream; genesis retries |
+| R20 | The Clerk accountless claim URL is a one-time ownership token and now appears in the `RESULT` line, Machinist events, and Convex audit rows (design R9 asked for it in the hand-off). | decide whether the audit trail may hold it; alternative is Doppler-only with the UI reading Doppler |
+| R21 | A product repository registered after genesis is not advertised until the worker restarts; a foreman job for it waits in the queue. | bridge logs the need; automate with a worker reload or a per-product worker |
+| R22 | The foreman's automation gate needs the product's `main` to pass every required check on day one; the template's lockfile advisories and example strings blocked both first products. | genesis now audit-fixes and scans a real baseline; upstream SVCOS issues #7–#9 |
+| R23 | Gray mode with team lockdown (one required review) blocks a solo operator's own products exactly as it blocked the factory repo. | per-product decision at genesis (`LOCKDOWN_MODE_GRAY=solo` for solo operators) or a second reviewer identity |
 | R18 | Machinist moves fast (v0.2.0 → v0.4.0 in three days); prompt and config formats may change under the factory. | pin `MACHINIST_VERSION`; fetch prompts at that tag; re-verify on every bump |
 
 ## 13. Repository
