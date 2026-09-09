@@ -3,10 +3,13 @@ package backend
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 )
+
+func noEnv(string) string { return "" }
 
 func TestLocalPassesStdinThroughAndReturnsExitCode(t *testing.T) {
 	var out bytes.Buffer
@@ -66,18 +69,31 @@ func TestLocalCancellationTerminatesProcessGroup(t *testing.T) {
 	}
 }
 
-func TestStubBackendsReportNotImplemented(t *testing.T) {
-	for _, name := range []string{"daytona", "cloudflare", "scaleway"} {
-		b, err := New(name)
+func TestNewResolvesEveryDeclaredBackend(t *testing.T) {
+	for _, name := range []string{"local", "docker", "scaleway", "cloudflare"} {
+		b, err := New(name, noEnv)
 		if err != nil {
 			t.Fatalf("New(%q): %v", name, err)
 		}
-		code, err := b.Run(context.Background(), Spec{Command: []string{"true"}})
-		if code != ExitCodeUnavailable || err == nil {
-			t.Fatalf("%s: code=%d err=%v, want unavailable", name, code, err)
+		if b.Name() != name {
+			t.Fatalf("New(%q).Name() = %q", name, b.Name())
 		}
 	}
-	if _, err := New("nope"); err == nil {
+	if _, err := New("daytona", noEnv); err == nil {
+		t.Fatalf("daytona without credentials should fail to construct")
+	}
+	if _, err := New("nope", noEnv); err == nil {
 		t.Fatalf("unknown backend accepted")
+	}
+}
+
+func TestCloudflareStubReportsNotImplemented(t *testing.T) {
+	b, err := New("cloudflare", noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := b.Run(context.Background(), Spec{Command: []string{"true"}})
+	if code != ExitCodeUnavailable || !errors.Is(err, ErrNotImplemented) || !strings.Contains(err.Error(), "Worker") {
+		t.Fatalf("cloudflare: code=%d err=%v", code, err)
 	}
 }
