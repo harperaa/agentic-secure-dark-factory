@@ -126,3 +126,22 @@ export const retryStage = internalMutation({
     return { runId, stage: last.stage };
   },
 });
+
+/** Correct the tracked pull request for a project in review (e.g. after a mis-parsed hand-off). */
+export const setPullRequest = internalMutation({
+  args: { name: v.string(), pr: v.number() },
+  handler: async (ctx, { name, pr }) => {
+    const project = await ctx.db.query("projects").withIndex("by_name", (q) => q.eq("name", name)).unique();
+    if (!project) {
+      throw new Error(`no project named ${name}`);
+    }
+    const now = Date.now();
+    const open = await ctx.db.query("decisions").withIndex("by_project_status", (q) => q.eq("projectId", project._id).eq("status", "open")).collect();
+    for (const d of open) {
+      await ctx.db.patch(d._id, { status: "resolved", resolvedBy: "cli:operator", resolvedAt: now, note: `superseded: tracked PR corrected to #${pr}` });
+    }
+    await ctx.db.patch(project._id, { currentPr: pr, stage: "REVIEW_LOOP", repairRound: 0, updatedAt: now });
+    await ctx.db.insert("events", { projectId: project._id, at: now, actor: "cli:operator", action: "pr.set", before: { pr: project.currentPr ?? null }, after: { pr } });
+    return { pr };
+  },
+});
