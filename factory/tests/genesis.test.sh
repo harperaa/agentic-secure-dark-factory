@@ -41,6 +41,7 @@ GENERATED .secrets.baseline passed
 GENERATED .github/workflows/factory-security.yml passed
 GENERATED AGENTS.md passed
 GENESIS generated-files passed
+GENESIS secrets-baseline skipped
 GENESIS github-setup started
 GENESIS github-setup passed
 GENESIS doppler-ci-token started
@@ -95,6 +96,7 @@ GENESIS configure passed
 GENESIS doppler-sync skipped
 GENESIS generated-files started
 GENESIS generated-files passed
+GENESIS secrets-baseline skipped
 GENESIS github-setup skipped
 GENESIS doppler-ci-token skipped
 GENESIS vercel-link skipped
