@@ -216,7 +216,9 @@ async function syncGates() {
   const targets = await convex.query(api.bridge.reviewTargets, { secret });
   for (const t of targets) {
     const checks = sh("gh", ["pr", "checks", String(t.pr), "--repo", t.repo, "--json", "name,bucket"]);
-    const ci = checks.ok ? JSON.parse(checks.stdout || "[]").map((c) => ({ name: c.name, conclusion: c.bucket === "pass" ? "success" : c.bucket === "fail" ? "failure" : c.bucket === "skipping" ? "skipped" : "pending" })) : [];
+    const req = sh("gh", ["api", `repos/${t.repo}/branches/main/protection/required_status_checks`, "--jq", ".contexts[]"]);
+    const required = new Set(req.ok ? req.stdout.split("\n").filter(Boolean) : []);
+    const ci = checks.ok ? JSON.parse(checks.stdout || "[]").map((c) => ({ name: c.name, conclusion: c.bucket === "pass" ? "success" : c.bucket === "fail" ? "failure" : c.bucket === "skipping" ? "skipped" : "pending", required: required.has(c.name) })) : [];
     const view = sh("gh", ["pr", "view", String(t.pr), "--repo", t.repo, "--json", "headRefOid,files,labels"]);
     const v = view.ok ? JSON.parse(view.stdout) : {};
     const score = sh(path.join(factoryRoot, "factory/scripts/greptile-score.sh"), [t.repo, String(t.pr)]);
@@ -232,7 +234,7 @@ async function syncGates() {
       changedPaths: (v.files ?? []).map((f) => f.path),
       labels: (v.labels ?? []).map((l) => l.name),
     });
-    log("gate-sync", "passed", `repo=${t.repo} pr=${t.pr} ci=${ci.length} score=${sc.score ?? "none"}`);
+    log("gate-sync", "passed", `repo=${t.repo} pr=${t.pr} ci=${ci.length} required=${ci.filter((c) => c.required).length} score=${sc.score ?? "none"}`);
   }
 }
 
