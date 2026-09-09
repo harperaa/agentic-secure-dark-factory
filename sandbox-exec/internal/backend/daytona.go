@@ -43,7 +43,7 @@ type Daytona struct {
 
 // Environment variable names read by NewDaytona.
 const (
-	EnvDaytonaAPIKey = "DAYTONA_API_KEY"
+	EnvDaytonaAPIKey = "DAYTONA_API_KEY" // pragma: allowlist secret (variable name, not a value)
 	EnvDaytonaAPIURL = "DAYTONA_API_URL"
 	EnvDaytonaTarget = "DAYTONA_TARGET"
 )
