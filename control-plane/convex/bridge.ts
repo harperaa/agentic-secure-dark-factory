@@ -213,8 +213,10 @@ export const reviewTargets = query({
   args: { secret: v.string() },
   handler: async (ctx, { secret }) => {
     requireBridge(secret);
-    const projects = await ctx.db.query("projects").withIndex("by_stage", (q) => q.eq("stage", "REVIEW_LOOP")).collect();
-    return projects
+    // Stopped projects keep their gate fresh too, so an unblock evaluates current CI, not the failure it stopped on.
+    const inReview = await ctx.db.query("projects").withIndex("by_stage", (q) => q.eq("stage", "REVIEW_LOOP")).collect();
+    const stopped = await ctx.db.query("projects").withIndex("by_stage", (q) => q.eq("stage", "NEEDS_HUMAN")).collect();
+    return [...inReview, ...stopped]
       .filter((p) => p.repo !== undefined && p.currentPr !== undefined)
       .map((p) => ({ projectId: p._id, repo: p.repo as string, pr: p.currentPr as number }));
   },
