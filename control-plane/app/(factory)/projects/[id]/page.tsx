@@ -10,7 +10,7 @@ import { errorCopy, runStateCopy, stageCopy } from "@/lib/factory/copy";
 import { elapsed } from "@/lib/factory/stations";
 import { Line } from "../../_components/line";
 import { DecisionList } from "../../_components/decision-list";
-import { ButtonPrimary, Field, Panel } from "../../_components/panel";
+import { ButtonPrimary, ButtonSecondary, Field, Panel } from "../../_components/panel";
 import { useNow } from "../../_components/use-now";
 
 /** Project: the line across the top, the current station's evidence, decisions, runs. */
@@ -18,6 +18,9 @@ export default function ProjectPage() {
   const { id } = useParams<{ id: string }>();
   const data = useQuery(api.ui.project, { projectId: id as Id<"projects"> });
   const startLine = useMutation(api.projects.startLine);
+  const requestClaimUrl = useMutation(api.ui.requestClaimUrl);
+  const clearClaimUrl = useMutation(api.ui.clearClaimUrl);
+  const claim = useQuery(api.ui.claimUrl, { projectId: id as Id<"projects"> });
   const now = useNow();
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -149,6 +152,24 @@ export default function ProjectPage() {
         </Panel>
       </div>
 
+      <Panel title="Clerk application">
+        <p className="text-[var(--ink-muted)] text-[length:var(--text-14)]">
+          The accountless Clerk app created at genesis stays unclaimed until you open its claim link. The link lives only in the product&apos;s Doppler dev config; reveal it here when you need it, then clear it.
+        </p>
+        {claim?.url ? (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <a className="underline break-all" href={claim.url} target="_blank" rel="noreferrer">Open the claim link</a>
+            <ButtonSecondary onClick={() => void clearClaimUrl({ effectId: claim.effectId })}>Clear</ButtonSecondary>
+          </div>
+        ) : claim?.status === "queued" || claim?.status === "running" ? (
+          <p className="mt-2" aria-live="polite">Reading it from Doppler on the worker machine…</p>
+        ) : (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <ButtonSecondary onClick={() => void requestClaimUrl({ projectId: id as Id<"projects"> })}>Reveal claim link</ButtonSecondary>
+            {claim?.error ? <span className="text-[var(--andon-stop)]">{claim.error}</span> : null}
+          </div>
+        )}
+      </Panel>
       <Panel title={`Runs (${runs.length})`}>
         {runs.length === 0 ? (
           <p className="text-[length:var(--text-14)] text-ink-muted">No runs yet.</p>

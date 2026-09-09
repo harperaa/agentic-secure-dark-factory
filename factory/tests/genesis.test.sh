@@ -41,7 +41,8 @@ GENERATED .secrets.baseline passed
 GENERATED .github/workflows/factory-security.yml passed
 GENERATED AGENTS.md passed
 GENESIS generated-files passed
-GENESIS secrets-baseline skipped
+GENESIS secrets-baseline started
+GENESIS secrets-baseline passed
 GENESIS github-setup started
 GENESIS github-setup passed
 GENESIS doppler-ci-token started
@@ -67,7 +68,7 @@ PROTECT required-checks passed
 GENESIS lockdown passed"
 assert_eq "$(genesis_steps "$out" | grep -v '^GENERATED' ; true)" "$(printf '%s\n' "$expected_fresh" | grep -v '^GENERATED')" "fresh run emits the golden step sequence"
 assert_eq "$(genesis_steps "$out" | grep -c '^GENERATED .* passed')" 5 "five factory-owned files are written"
-assert_contains "$out" "RESULT status=ready repo=fixture-owner/g1 repo_url=https://github.com/fixture-owner/g1 url=https://fake-product.vercel.app sandbox=local clerk_claim_url=https://dashboard.clerk.com/apps/claim?token=fake" "RESULT line is unchanged"
+assert_contains "$out" "RESULT status=ready repo=fixture-owner/g1 repo_url=https://github.com/fixture-owner/g1 url=https://fake-product.vercel.app sandbox=local" "RESULT line is unchanged"
 assert_contains "$out" '"claimUrl": "https://dashboard.clerk.com/apps/claim?token=fake"' "init output with the claim URL is in the run record"
 prod="$FACTORY_WORKSPACE/g1"
 assert_file "$prod/AGENTS.md" "AGENTS.md generated into the product"
@@ -96,7 +97,8 @@ GENESIS configure passed
 GENESIS doppler-sync skipped
 GENESIS generated-files started
 GENESIS generated-files passed
-GENESIS secrets-baseline skipped
+GENESIS secrets-baseline started
+GENESIS secrets-baseline passed
 GENESIS github-setup skipped
 GENESIS doppler-ci-token skipped
 GENESIS vercel-link skipped
@@ -118,7 +120,7 @@ PROTECT required-checks passed
 GENESIS lockdown passed"
 assert_eq "$(genesis_steps "$out" | grep -v '^GENERATED'; true)" "$expected_rerun" "re-run skips every completed step"
 assert_contains "$out" "RESULT status=ready repo=fixture-owner/g1" "re-run still reports the RESULT line"
-assert_contains "$out" "clerk_claim_url=https://dashboard.clerk.com/apps/claim?token=fake" "re-run recovers the claim URL from the broker"
+assert_not_contains "$out" "clerk_claim_url=" "re-run keeps the claim URL out of the RESULT line (it stays in the broker)"
 
 # --- failures stop the stage --------------------------------------------------------------
 reset_stores
