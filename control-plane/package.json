@@ -7,7 +7,7 @@
   "scripts": {
     "codegen": "convex codegen",
     "typecheck": "tsc --noEmit",
-    "test": "node --test factory/policy/*.test.mjs",
+    "test": "node --test factory/policy/*.test.mjs factory/providers/*.test.mjs",
     "validate-spec": "node scripts/validate-spec.mjs"
   },
   "dependencies": {

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Fake `doppler` for adapter contract tests. Backed by FAKE_DOPPLER_STORE (key=value lines) and
+# FAKE_DOPPLER_TOKENS (JSON array of {name, slug}). FAKE_DOPPLER_DOWN=1 makes every call fail
+# the way an expired login does, to prove probes do not fail open.
+set -euo pipefail
+printf 'doppler %s\n' "$*" >> "${FAKE_LOG:-/dev/null}"
+store="${FAKE_DOPPLER_STORE:?FAKE_DOPPLER_STORE unset}"
+touch "$store"
+if [ "${FAKE_DOPPLER_DOWN:-}" = "1" ]; then
+  printf 'Doppler Error: Invalid auth token\n' >&2
+  exit 1
+fi
+case "${1:-} ${2:-}" in
+  "me ")
+    [ "${3:-}" = "--json" ] && printf '{"workplace":{"name":"Fake"},"type":"cli"}\n' || printf 'fake user\n' ;;
+  "secrets get")
+    key="$3"
+    value=$(grep "^$key=" "$store" | tail -n 1 | cut -d= -f2- || true)
+    if [ -z "$value" ]; then printf 'Doppler Error: Could not find requested secret: %s\n' "$key" >&2; exit 1; fi
+    printf '%s' "$value" ;;
+  "secrets set")
+    printf '%s\n' "$3" >> "$store" ;;
+  "secrets download")
+    cat "$store" ;;
+  "configs tokens")
+    case "${3:-}" in
+      revoke) printf 'revoked %s\n' "${4:-}" >> "${FAKE_LOG:-/dev/null}" ;;
+      *) printf '%s\n' "${FAKE_DOPPLER_TOKENS:-[]}" ;;
+    esac ;;
+  *) printf 'fake doppler: unhandled %s\n' "$*" >&2; exit 99 ;;
+esac

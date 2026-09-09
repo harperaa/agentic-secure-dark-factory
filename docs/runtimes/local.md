@@ -16,7 +16,7 @@ The author's Machinist VM shape on the operator's own machine or VM (design §5.
 ## Install
 
 1. Install the pinned Machinist release (`MACHINIST_VERSION` in `factory.env`) with its checksum-verified installer, for example `MACHINIST_VERSION=v0.4.0 MACHINIST_INSTALL_DIR=~/.local/bin sh install.sh`. On a shared VM follow Machinist's `docs/vm-deployment.md` and run everything as the `machinist` user. Authenticate `gh`, `claude`, `codex`, `vercel`, `convex`, and `doppler` in that account.
-2. Copy `factory/config/factory.env.example` to a private path (for example `~/.config/asdf/factory.env`, mode 600) and fill it in. `VERCEL_SCOPE` is required by genesis; `CONVEX_TEAM` only when the account has several teams.
+2. Run `factory/scripts/doctor.sh` to see which CLIs and logins are present and the candidate values for the GitHub owner, `VERCEL_SCOPE`, `CONVEX_TEAM` (a slug, not the display name), and the Doppler workplace. `doctor.sh --write ~/.config/asdf/factory.env` writes a private copy of `factory.env.example` (mode 600) with the unambiguous values filled in; where an account has several scopes or teams the key is left blank for you to choose. `VERCEL_SCOPE` is required by genesis; `CONVEX_TEAM` only when the account has several teams.
 3. Export it and render the Machinist configuration:
 
    ```bash

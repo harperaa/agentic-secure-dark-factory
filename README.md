@@ -77,7 +77,15 @@ control-plane/           Convex schema, policy, UI tokens (the SVCOS app scaffol
 ## Getting started (local runtime, M0)
 
 1. Install Machinist per its VM guide, or on your own machine as an unprivileged user.
-2. Copy `factory/config/factory.env.example` to a private location, fill it in, and export it.
+2. Let the doctor discover the values you cannot guess (GitHub owner, Vercel scope, Convex
+   team slug, Doppler workplace) and write a private env file; then choose where it left a
+   blank and export it:
+
+   ```bash
+   factory/scripts/doctor.sh --write ~/.config/asdf/factory.env
+   set -a; source ~/.config/asdf/factory.env; set +a
+   ```
+
 3. Render and install the Machinist configuration:
 
    ```bash

@@ -7,14 +7,18 @@
 #
 # Runs in the registered `factory-workspace` repository directory; the product is cloned beneath it.
 # Inputs: spec on stdin; operator environment from factory.env (see factory/config/factory.env.example).
+# Providers: every provider call goes through an adapter selected from the spec's providers block
+# (factory/providers, design §4.11); this script never names Vercel, Doppler, Convex, or Clerk.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
+# shellcheck source=../providers/load.sh
+source "$SCRIPT_DIR/../providers/load.sh"
 
 STAGE=GENESIS
 require_cmd git node npm npx gh jq
-require_env FACTORY_ROOT FACTORY_WORKSPACE SVCOS_TEMPLATE_URL SVCOS_TEMPLATE_REF VERCEL_SCOPE \
+require_env FACTORY_ROOT FACTORY_WORKSPACE SVCOS_TEMPLATE_URL SVCOS_TEMPLATE_REF \
   LOCKDOWN_MODE_DARK LOCKDOWN_MODE_GRAY FACTORY_REQUIRED_CONTEXTS
 
 SPEC=$(cat)
@@ -30,10 +34,12 @@ modules=$(jq -r '(.modules // []) | join(" ")' <<<"$SPEC")
 clerk_pk=$(jq -r '.clerk.publishable_key // empty' <<<"$SPEC")
 clerk_sk_ref=$(jq -r '.clerk.secret_key_ref // empty' <<<"$SPEC")
 sandbox=$(jq -r '.providers.sandbox // empty' <<<"$SPEC")
-profile=$(jq -r '.providers.profile // empty' <<<"$SPEC")
 
-[ "$profile" = "default" ] || die "NEEDS_HUMAN reason=profile-unsupported profile=$profile (only the default provider profile is implemented; see docs/providers)"
-[ "$secrets_mode" = "doppler" ] || die "NEEDS_HUMAN reason=secrets-mode-unsupported secrets_mode=$secrets_mode (env mode arrives with the Infisical adapter in M7)" # pragma: allowlist secret
+# --- 0. Provider profile gate (design §4.11 rules): refuse before touching anything ----------
+providers_load "$SPEC"
+providers_gate
+[ "$(secrets_mode)" = "$secrets_mode" ] || \
+  die "NEEDS_HUMAN reason=secrets-mode-mismatch spec=$secrets_mode adapter=$PROVIDER_SECRETS provides=$(secrets_mode)" # pragma: allowlist secret
 
 workspace=$(expand_tilde "$FACTORY_WORKSPACE")
 target="$workspace/$name"
@@ -66,43 +72,43 @@ else
   log $STAGE npm-ci passed
 fi
 
-# --- 3. Secrets broker (Doppler mode) -----------------------------------------------------
-if [ -f .doppler.yaml ]; then
-  log $STAGE doppler-bootstrap skipped
+# --- 3. Secrets broker --------------------------------------------------------------------
+step=$(secrets_step_name bootstrap)
+if secrets_bootstrapped; then
+  log $STAGE "$step" skipped
 else
-  # Local runtime: the worker account's Doppler CLI login is the credential (design §8.1).
-  # Cloud sandboxes inject DOPPLER_TOKEN per run instead.
-  if [ -z "${DOPPLER_TOKEN:-}" ] && ! doppler me >/dev/null 2>&1; then
-    printf 'MISSING_ENV DOPPLER_TOKEN (or a Doppler CLI login for this account)\n' >&2
-    exit 2
-  fi
-  log $STAGE doppler-bootstrap started
-  node scripts/setup.mjs doppler-bootstrap --project-name="$name"
-  log $STAGE doppler-bootstrap passed
+  log $STAGE "$step" started
+  secrets_bootstrap "$name"
+  log $STAGE "$step" passed
 fi
 
-# --- 4. Init (Clerk keys, app secrets, env) -----------------------------------------------
+# --- 4. Init (identity keys, app secrets, env) --------------------------------------------
 claim_url=""
-if has_setting NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY; then
-  claim_url=$(get_setting FACTORY_CLERK_CLAIM_URL)
+if identity_has_app; then
+  claim_url=$(secrets_get FACTORY_CLERK_CLAIM_URL)
   log $STAGE init skipped
 else
   log $STAGE init started
-  init_args=(init "--site-name=$name" "--admin-email=$email")
+  clerk_sk=""
   if [ -n "$clerk_pk" ]; then
     [ -n "$clerk_sk_ref" ] || die "MISSING_ARG clerk.secret_key_ref"
     # The secret is resolved through the secrets adapter, never read from the spec.
     clerk_sk=$("$SCRIPT_DIR/resolve-secret.sh" "$clerk_sk_ref")
-    init_args+=("--clerk-pk=$clerk_pk" "--clerk-sk=$clerk_sk")
   fi
-  init_out=$(node scripts/setup.mjs "${init_args[@]}")
-  init_json=$(last_json_line "$init_out")
-  assert_success "$init_json" init
+  # identity_create_app prints the full init output (claim URL included) into the run record
+  # before anything else can fail, and leaves the compact result in SVCOS_JSON.
+  identity_create_app "$name" "$email" "$clerk_pk" "$clerk_sk"
+  init_json="$SVCOS_JSON"
   claim_url=$(json_field "$init_json" claimUrl)
   # The claim URL is returned exactly once; keep it in the secrets broker so a re-run and the
-  # hand-off can still surface it (design R9).
-  if [ -n "$claim_url" ] && [ -f .doppler.yaml ]; then
-    doppler secrets set FACTORY_CLERK_CLAIM_URL="$claim_url" --config dev --silent >/dev/null
+  # hand-off can still surface it (design R9). Losing the copy is logged, never fatal: the URL
+  # is already in the run record above.
+  if [ -n "$claim_url" ]; then
+    if secrets_set FACTORY_CLERK_CLAIM_URL "$claim_url"; then
+      log $STAGE init-claim-url passed
+    else
+      log $STAGE init-claim-url failed reason=secrets-set-failed note=claim-url-in-run-record
+    fi
   fi
   log $STAGE init passed accountless="$(json_field "$init_json" accountless)"
 fi
@@ -117,36 +123,33 @@ else
   log $STAGE modules skipped
 fi
 
-# --- 6. Convex project --------------------------------------------------------------------
-if has_setting NEXT_PUBLIC_CONVEX_URL; then
+# --- 6. Backend project -------------------------------------------------------------------
+if backend_has_project; then
   log $STAGE convex-setup skipped
 else
   log $STAGE convex-setup started
-  convex_args=(convex-setup "--project-name=$name")
-  [ -n "${CONVEX_TEAM:-}" ] && convex_args+=("--team=$CONVEX_TEAM")
-  convex_out=$(node scripts/setup.mjs "${convex_args[@]}")
-  printf '%s\n' "$convex_out"
-  assert_success "$(last_json_line "$convex_out")" convex-setup
+  backend_create_project "$name"
   log $STAGE convex-setup passed
 fi
 
-# --- 7. Configure webhook + Convex env, install summary -----------------------------------
+# --- 7. Configure webhook + backend env, install summary ----------------------------------
 log $STAGE configure started
-configure_out=$(node scripts/setup.mjs configure --admin-email="$email")
-printf '%s\n' "$configure_out"
-assert_success "$(last_json_line "$configure_out")" configure
+identity_configure "$email"
 node scripts/setup.mjs write-install-summary \
   --modules-installed="${modules// /,}" \
   ${claim_url:+--claim-url="$claim_url" --accountless=true}
 log $STAGE configure passed
 
-# --- 7b. Doppler post-init: Convex writes its outputs to .env.local; push them to Doppler dev
-if [ -f .doppler.yaml ]; then
-  log $STAGE doppler-sync started
-  sync_out=$(node scripts/setup.mjs doppler-sync-env-local)
-  printf '%s\n' "$sync_out"
-  assert_success "$(last_json_line "$sync_out")" doppler-sync
-  log $STAGE doppler-sync passed
+# --- 7b. Secrets post-init: the backend writes its outputs to .env.local; push them up -------
+if secrets_supports_sync_local; then
+  step=$(secrets_step_name sync_local)
+  if secrets_supports_synced && secrets_synced; then
+    log $STAGE "$step" skipped
+  else
+    log $STAGE "$step" started
+    secrets_sync_local
+    log $STAGE "$step" passed
+  fi
 fi
 
 # --- 8. Factory-owned files (AGENTS.md, security workflow, baselines) ---------------------
@@ -154,62 +157,51 @@ log $STAGE generated-files started
 "$SCRIPT_DIR/apply-generated.sh" "$target"
 log $STAGE generated-files passed
 
-# --- 9. GitHub repository (creates, sets origin, pushes main) -----------------------------
-origin=$(git remote get-url origin 2>/dev/null || true)
-if [[ "$origin" == *"/$owner/$name"* || "$origin" == *":$owner/$name"* ]]; then
-  log $STAGE github-setup skipped origin="$origin"
+# --- 9. Source repository (creates, sets origin, pushes main) -----------------------------
+if scm_has_repo "$owner" "$name"; then
+  log $STAGE github-setup skipped origin="$(git remote get-url origin)"
 else
   log $STAGE github-setup started
   git add -A
   git diff --cached --quiet || git -c user.name="${GIT_AUTHOR_NAME:-factory}" -c user.email="${GIT_AUTHOR_EMAIL:-$email}" \
     commit -q -m "chore: factory genesis for $name"
-  gh_out=$(node scripts/deploy.mjs github-setup --repo-name="$name" --owner="$owner")
-  printf '%s\n' "$gh_out"
-  assert_success "$(last_json_line "$gh_out")" github-setup
+  scm_create_repo "$owner" "$name"
   log $STAGE github-setup passed
 fi
-repo_url=$(gh repo view "$owner/$name" --json url -q .url)
-# With origin and upstream both present, gh would otherwise resolve upstream (the template) as
-# the default repository for every later gh call in this checkout, including lockdown-main.sh.
-gh repo set-default "$owner/$name"
+repo_url=$(scm_repo_url "$owner" "$name")
+scm_set_default "$owner" "$name"
 
-# --- 9b. Doppler CI token pushed to GitHub Actions (needs the repo to exist) ---------------
-if [ -f .doppler.yaml ]; then
-  if gh secret list --repo "$owner/$name" --json name -q '.[].name' 2>/dev/null | grep -qx DOPPLER_TOKEN; then
-    log $STAGE doppler-ci-token skipped
-  else
-    log $STAGE doppler-ci-token started
-    # The product has origin and upstream remotes; tell gh which repo without patching SVCOS.
-    ci_out=$(GH_REPO="$owner/$name" node scripts/setup.mjs doppler-create-ci-token)
-    printf '%s\n' "$ci_out"
-    assert_success "$(last_json_line "$ci_out")" doppler-ci-token
-    log $STAGE doppler-ci-token passed
-  fi
-fi
-
-# --- 10. Vercel link and git connect ------------------------------------------------------
-if [ -f .vercel/project.json ]; then
-  log $STAGE vercel-link skipped
+# --- 9b. CI secret for the secrets broker (needs the repo to exist) -----------------------
+step=$(secrets_step_name ci_token)
+if ! secrets_supports_ci_token; then
+  log $STAGE "$step" skipped reason=adapter-human-gate
+elif secrets_has_ci_token "$owner/$name"; then
+  log $STAGE "$step" skipped
 else
-  log $STAGE vercel-link started
-  npx vercel project add "$name" --scope="$VERCEL_SCOPE" >/dev/null 2>&1 || true
-  npx vercel link --yes --project="$name" --scope="$VERCEL_SCOPE"
-  npx vercel git connect "$(git remote get-url origin)" --yes --scope="$VERCEL_SCOPE" || \
-    log $STAGE vercel-git-connect failed reason=non-fatal
-  log $STAGE vercel-link passed
+  log $STAGE "$step" started
+  secrets_ci_token "$owner/$name"
+  log $STAGE "$step" passed
 fi
 
-# --- 10b. vercel.json for the active mode (mirrors /deploy-to-dev step 3) ------------------
-# The template's own vercel.json re-installs modules at build time so the demo site renders;
-# a product has its modules committed, so that command must go or the Vercel build fails.
-log $STAGE vercel-config started
-if [ -f .doppler.yaml ]; then
-  jq -n '{"$schema":"https://openapi.vercel.sh/vercel.json", framework:"nextjs", buildCommand:"node scripts/vercel-prebuild.mjs && npm run build"}' > vercel.json
+# --- 10. Hosting link ---------------------------------------------------------------------
+step=$(hosting_step_name link)
+if hosting_is_linked; then
+  log $STAGE "$step" skipped
 else
-  jq -n '{framework:"nextjs"}' > vercel.json
+  log $STAGE "$step" started
+  hosting_link "$name"
+  log $STAGE "$step" passed
 fi
-grep -q 'modules.mjs install' vercel.json && die "vercel.json still re-installs modules"
-log $STAGE vercel-config passed mode="$([ -f .doppler.yaml ] && echo doppler || echo env)"
+
+# --- 10b. Hosting build config for the active secrets mode --------------------------------
+step=$(hosting_step_name config)
+if hosting_supports_config_current && hosting_config_current "$(secrets_mode)"; then
+  log $STAGE "$step" skipped mode="$(secrets_mode)"
+else
+  log $STAGE "$step" started
+  hosting_write_config "$(secrets_mode)"
+  log $STAGE "$step" passed mode="$(secrets_mode)"
+fi
 
 # --- 11. Push everything the steps above changed ------------------------------------------
 log $STAGE push started
@@ -221,8 +213,8 @@ log $STAGE push passed
 
 # --- 12. Dev deploy -----------------------------------------------------------------------
 log $STAGE deploy-dev started
-deploy_out=$("$SCRIPT_DIR/deploy-dev.sh" <<<"$(jq -n --arg n "$name" --arg o "$owner" --arg s "$VERCEL_SCOPE" --arg e "$email" \
-  '{name:$n, github_owner:$o, vercel_scope:$s, admin_email:$e}')")
+deploy_out=$("$SCRIPT_DIR/deploy-dev.sh" <<<"$(jq -n --arg n "$name" --arg o "$owner" --arg e "$email" --argjson p "$(jq -c '.providers' <<<"$SPEC")" \
+  '{name:$n, github_owner:$o, admin_email:$e, providers:$p}')")
 printf '%s\n' "$deploy_out"
 url=$(printf '%s\n' "$deploy_out" | sed -n 's/^DEPLOY_RESULT .*url=\([^ ]*\).*/\1/p' | tail -n 1)
 [ -n "$url" ] || die "deploy-dev produced no URL"
@@ -231,8 +223,7 @@ log $STAGE deploy-dev passed
 # --- 13. Branch protection ----------------------------------------------------------------
 log $STAGE lockdown started mode="$mode"
 lockdown_mode=$([ "$mode" = "dark" ] && printf '%s' "$LOCKDOWN_MODE_DARK" || printf '%s' "$LOCKDOWN_MODE_GRAY")
-if [ "$lockdown_mode" = "solo" ]; then GH_REPO="$owner/$name" ./scripts/lockdown-main.sh --solo; else GH_REPO="$owner/$name" ./scripts/lockdown-main.sh; fi
-"$SCRIPT_DIR/protect-main.sh" "$owner/$name" "$FACTORY_REQUIRED_CONTEXTS"
+scm_protect "$owner/$name" "$lockdown_mode" "$FACTORY_REQUIRED_CONTEXTS"
 log $STAGE lockdown passed
 
 printf 'RESULT status=ready repo=%s/%s repo_url=%s url=%s sandbox=%s%s\n' \

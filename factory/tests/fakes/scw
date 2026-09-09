@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Fake `scw` (Scaleway CLI) for the hosting/scaleway adapter tests.
+set -euo pipefail
+printf 'scw %s\n' "$*" >> "${FAKE_LOG:-/dev/null}"
+case "${1:-} ${2:-} ${3:-}" in
+  "container container list") printf '%s\n' "${FAKE_SCW_CONTAINERS:-[]}" ;;
+  "container container create") printf '{"id":"cont-fake-1","name":"fake"}\n' ;;
+  "container container update") printf '{"id":"cont-fake-1"}\n' ;;
+  "container container deploy") printf '{"id":"cont-fake-1","status":"pending"}\n' ;;
+  "container container get") printf '{"id":"cont-fake-1","domain_name":"fake.functions.fnc.fr-par.scw.cloud"}\n' ;;
+  *) printf 'fake scw: unhandled %s\n' "$*" >&2; exit 99 ;;
+esac
