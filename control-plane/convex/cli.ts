@@ -90,3 +90,39 @@ export const status = internalMutation({
     };
   },
 });
+
+/** Retry the last failed stage of a project after the operator fixed the cause (resolves open unblock decisions). */
+export const retryStage = internalMutation({
+  args: { name: v.string() },
+  handler: async (ctx, { name }) => {
+    const project = await ctx.db.query("projects").withIndex("by_name", (q) => q.eq("name", name)).unique();
+    if (!project) {
+      throw new Error(`no project named ${name}`);
+    }
+    const last = await ctx.db.query("runs").withIndex("by_project", (q) => q.eq("projectId", project._id)).order("desc").first();
+    if (!last || last.state === "queued" || last.state === "running") {
+      throw new Error("nothing to retry: no terminal run");
+    }
+    const now = Date.now();
+    const open = await ctx.db.query("decisions").withIndex("by_project_status", (q) => q.eq("projectId", project._id).eq("status", "open")).collect();
+    for (const d of open) {
+      if (d.kind === "unblock") {
+        await ctx.db.patch(d._id, { status: "resolved", resolvedBy: "cli:operator", resolvedAt: now, note: "retried from the CLI" });
+      }
+    }
+    const runId = await ctx.db.insert("runs", {
+      projectId: project._id,
+      stage: last.stage,
+      command: last.command,
+      repository: last.repository,
+      prompt: last.prompt,
+      state: "queued",
+      attempt: 1,
+      queuedAt: now,
+      ...(last.ref === undefined ? {} : { ref: last.ref }),
+    });
+    await ctx.db.patch(project._id, { stage: last.stage, retryCount: 0, updatedAt: now });
+    await ctx.db.insert("events", { projectId: project._id, runId, at: now, actor: "cli:operator", action: "run.retry", after: { stage: last.stage } });
+    return { runId, stage: last.stage };
+  },
+});
