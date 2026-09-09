@@ -1,6 +1,6 @@
 import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
-import { stageValidator } from "./schema";
+import { stageValidator } from "./factoryTables";
 
 /**
  * Enqueue one stage run for a project identified by its GitHub repository.
