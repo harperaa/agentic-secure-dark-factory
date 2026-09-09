@@ -1,0 +1,199 @@
+#!/usr/bin/env node
+
+/**
+ * Sync Doppler secrets to Convex env.
+ *
+ * Doppler has no native Convex integration, so this script bridges them.
+ * Pulls allowlisted secrets from a Doppler config and applies them to the
+ * matching Convex deployment. Idempotent: only pushes changed/missing keys
+ * and unsets keys that have been removed from Doppler.
+ *
+ * Usage:
+ *   node scripts/sync-convex-env.mjs --config dev
+ *   node scripts/sync-convex-env.mjs --config prd
+ *
+ * For prd, requires CONVEX_DEPLOY_KEY in the Doppler `prd` config so
+ * `npx convex env set` targets the production deployment.
+ */
+
+import { execSync, spawnSync } from 'node:child_process';
+import { downloadSecrets } from './lib/doppler.mjs';
+
+// Allowlist — Convex functions only need these. Anything else stays in Doppler.
+const CONVEX_ALLOWLIST = [
+  'CLERK_WEBHOOK_SECRET',
+  'NEXT_PUBLIC_CLERK_FRONTEND_API_URL',
+  // Preferred issuer name (Convex/Clerk docs). Same value as Frontend API URL.
+  'CLERK_JWT_ISSUER_DOMAIN',
+  'ADMIN_EMAIL',
+];
+
+function parseArgs(argv) {
+  // Accept both `--key=value` and `--key value` forms. The space-separated
+  // form is what `npm run sync:convex` produces (package.json calls
+  // `--config dev`), and the equals form matches what other scripts in this
+  // repo use — supporting both keeps everything working.
+  const args = {};
+  const tokens = argv.slice(2);
+  for (let i = 0; i < tokens.length; i++) {
+    const arg = tokens[i];
+    if (!arg.startsWith('--')) continue;
+    const eqIndex = arg.indexOf('=');
+    if (eqIndex !== -1) {
+      args[arg.slice(2, eqIndex)] = arg.slice(eqIndex + 1);
+    } else {
+      const next = tokens[i + 1];
+      if (next !== undefined && !next.startsWith('--')) {
+        args[arg.slice(2)] = next;
+        i++;
+      } else {
+        args[arg.slice(2)] = 'true';
+      }
+    }
+  }
+  return args;
+}
+
+function listConvexEnv(deployKey) {
+  // `npx convex env list` outputs plain `KEY=value` lines (no --json flag exists).
+  const env = { ...process.env };
+  if (deployKey) env.CONVEX_DEPLOY_KEY = deployKey;
+  const result = spawnSync('npx', ['convex', 'env', 'list'], {
+    encoding: 'utf-8',
+    env,
+  });
+  if (result.status !== 0) {
+    throw new Error(`convex env list failed:\n${result.stderr || result.stdout}`);
+  }
+  const map = {};
+  for (const line of (result.stdout || '').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq === -1) continue;
+    const key = trimmed.slice(0, eq).trim();
+    const value = trimmed.slice(eq + 1);
+    if (key) map[key] = value;
+  }
+  return map;
+}
+
+function setConvexEnv(key, value, deployKey) {
+  const env = { ...process.env };
+  if (deployKey) env.CONVEX_DEPLOY_KEY = deployKey;
+  const result = spawnSync('npx', ['convex', 'env', 'set', key, value], {
+    stdio: ['ignore', 'inherit', 'inherit'],
+    env,
+  });
+  if (result.status !== 0) {
+    throw new Error(`convex env set ${key} failed.`);
+  }
+}
+
+function unsetConvexEnv(key, deployKey) {
+  const env = { ...process.env };
+  if (deployKey) env.CONVEX_DEPLOY_KEY = deployKey;
+  const result = spawnSync('npx', ['convex', 'env', 'unset', key], {
+    stdio: ['ignore', 'inherit', 'inherit'],
+    env,
+  });
+  if (result.status !== 0) {
+    throw new Error(`convex env unset ${key} failed.`);
+  }
+}
+
+async function main() {
+  const args = parseArgs(process.argv);
+  const config = args.config;
+
+  if (!config) {
+    console.error('Usage: node scripts/sync-convex-env.mjs --config dev|prd');
+    process.exit(1);
+  }
+  if (config !== 'dev' && config !== 'prd') {
+    console.error(`Unknown config "${config}". Expected dev or prd.`);
+    process.exit(1);
+  }
+
+  const dopplerSecrets = downloadSecrets(config);
+
+  // Filter to allowlist
+  const desired = {};
+  for (const key of CONVEX_ALLOWLIST) {
+    if (dopplerSecrets[key] !== undefined && dopplerSecrets[key] !== '') {
+      desired[key] = dopplerSecrets[key];
+    }
+  }
+
+  // Derive issuer domain from Frontend API URL when only the latter is in Doppler
+  // (common after older installs). Keeps auth.config.ts providers populated.
+  if (
+    desired.NEXT_PUBLIC_CLERK_FRONTEND_API_URL &&
+    !desired.CLERK_JWT_ISSUER_DOMAIN
+  ) {
+    desired.CLERK_JWT_ISSUER_DOMAIN =
+      desired.NEXT_PUBLIC_CLERK_FRONTEND_API_URL;
+  }
+
+  // For prd, surface CONVEX_DEPLOY_KEY to convex CLI
+  const deployKey = config === 'prd' ? dopplerSecrets.CONVEX_DEPLOY_KEY : undefined;
+  if (config === 'prd' && !deployKey) {
+    console.error('Missing CONVEX_DEPLOY_KEY in Doppler prd config — cannot target production deployment.');
+    process.exit(1);
+  }
+
+  const current = listConvexEnv(deployKey);
+
+  const toSet = [];
+  const toUnset = [];
+
+  for (const key of CONVEX_ALLOWLIST) {
+    const desiredValue = desired[key];
+    const currentValue = current[key];
+
+    if (desiredValue === undefined && currentValue !== undefined) {
+      toUnset.push(key);
+    } else if (desiredValue !== undefined && currentValue !== desiredValue) {
+      toSet.push(key);
+    }
+  }
+
+  if (toSet.length === 0 && toUnset.length === 0) {
+    console.log(`Convex env (${config}) is already in sync with Doppler. No changes.`);
+    return;
+  }
+
+  for (const key of toSet) {
+    console.log(`  set ${key}`);
+    setConvexEnv(key, desired[key], deployKey);
+  }
+  for (const key of toUnset) {
+    console.log(`  unset ${key}`);
+    unsetConvexEnv(key, deployKey);
+  }
+
+  // Re-list Convex env and confirm every desired key now matches. We have
+  // observed cases during /install where `convex env set` exited 0 without
+  // actually persisting (likely a transient CLI/backend hiccup), which left
+  // the install reporting success while Convex still had no values. A second
+  // list closes that gap: if anything is missing, throw and let the caller
+  // surface a real error.
+  const verified = listConvexEnv(deployKey);
+  const stillMissing = [];
+  for (const [key, value] of Object.entries(desired)) {
+    if (verified[key] !== value) stillMissing.push(key);
+  }
+  if (stillMissing.length > 0) {
+    throw new Error(
+      `Convex env did not persist after sync: ${stillMissing.join(', ')}. ` +
+      `Re-run \`node scripts/sync-convex-env.mjs --config=${config}\` or set them manually with \`npx convex env set <KEY> <VALUE>\`.`
+    );
+  }
+
+  console.log(`Synced Convex env (${config}): ${toSet.length} set, ${toUnset.length} unset.`);
+}
+
+main().catch((err) => {
+  console.error(err.message || err);
+  process.exit(1);
+});

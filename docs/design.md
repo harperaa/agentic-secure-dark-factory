@@ -893,7 +893,7 @@ The factory's own repository runs the same controls it imposes on generated prod
 1. `gh repo create <org>/agentic-secure-dark-factory --public --description "…" --license mit`, add topics.
 2. Commit `README.md`, `SECURITY.md`, `docs/design.md` (this file), `docs/security/threat-model.md`, `spec/factory-spec.schema.json`.
 3. Add the security CI workflow and branch protection **before** any application code.
-4. Scaffold `control-plane/` from SVCOS via its headless install (the factory's first "genesis", done by hand).
+4. Scaffold `control-plane/` from SVCOS with `factory/scripts/scaffold-control-plane.sh <svcos-checkout>` (copies the template without any provider state), then run its headless install (the factory's first "genesis", done by hand). Never copy a checkout's `.env.local` or `.doppler.yaml`: the first attempt did, and the control plane's functions were pushed to that checkout's Convex deployment until it was restored.
 5. Add `factory/commands`, `factory/config`, `genesis.sh`, and `sandbox-exec` skeleton with the `local` backend.
 6. Tag `v0.0.1` and run the first `security-assessment` on the repo itself; commit the baseline.
 

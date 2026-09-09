@@ -1,0 +1,75 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+!.env.example
+
+# doppler — per-developer marker pointing repo at a Doppler config (not secret, but local)
+.doppler.yaml
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+docs/course/*
+docs/scripts/*
+
+
+course-outline.tsx.txt
+
+.claude/skills/course-lesson-builder/
+
+# Auto Claude data directory
+.auto-claude/
+
+# DeepSec agentic scanner scaffolding/cache (created by `npx deepsec init`)
+.deepsec/
+
+# secure-vibe-kit is tracked source (the published npm package), but never
+# commit build/publish artifacts generated inside it
+secure-vibe-kit/node_modules/
+secure-vibe-kit/*.tgz
+
+# transient worktrees created by Claude Code — never commit these
+.claude/worktrees/
+
+# Security assessment output (/security-assessment). Kept local, never committed:
+# raw findings name exact file paths, line numbers and reproduction steps for
+# issues that may still be open — in a public repo that is a roadmap, not a
+# disclosure. Re-generate with /security-assessment rather than reading a stale copy.
+security_context/
+security_reports/
+threat_modeling_output/

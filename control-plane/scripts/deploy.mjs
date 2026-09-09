@@ -1,0 +1,1951 @@
+#!/usr/bin/env node
+
+/**
+ * Automated Production Deployment Script for Secure Vibe Coding OS
+ *
+ * Subcommands:
+ *   check-tools           - Check prerequisites (Node, git, gh, vercel)
+ *   github-setup          - Create private GitHub repo, reconfigure remotes
+ *   convex-deploy-key     - Generate Convex production deploy key via Management API
+ *   validate-keys         - Validate Clerk keys (dev or prod), create JWT template
+ *   convex-deploy-functions - Deploy Convex functions to production
+ *   prod-webhook          - Create production webhook via Svix
+ *   convex-prod-env       - Set Convex production environment variables
+ *   vercel-env-dev        - Set Vercel env vars from .env.local (for /deploy-to-dev)
+ *   vercel-env            - Set Vercel production environment variables
+ *   vercel-deploy         - Trigger production deployment
+ *   write-summary         - Write deployment summary to docs/DEPLOYMENT-DEV.md or docs/DEPLOYMENT-PROD.md
+ *   update-vercel-clerk-keys - Update only Clerk-related Vercel env vars
+ *
+ * All input comes from CLI arguments (no interactive prompts).
+ * Designed to be called by the /deploy-to-dev and /deploy-to-prod Claude Code commands.
+ *
+ * Usage:
+ *   node scripts/deploy.mjs check-tools
+ *   node scripts/deploy.mjs github-setup --repo-name="my-project"
+ *   node scripts/deploy.mjs convex-deploy-key
+ *   node scripts/deploy.mjs validate-keys --clerk-pk=pk_live_... --clerk-sk=sk_live_... [--deploy-key=prod:...|...]
+ *   node scripts/deploy.mjs convex-deploy-functions --deploy-key=prod:...|...
+ *   node scripts/deploy.mjs prod-webhook --clerk-sk=sk_live_... --convex-site-url=https://xxx.convex.site --admin-email=admin@example.com
+ *   node scripts/deploy.mjs convex-prod-env --deploy-key=prod:...|... --webhook-secret=whsec_... --frontend-api-url=https://... --admin-email=admin@example.com
+ *   node scripts/deploy.mjs vercel-env --clerk-pk=... --clerk-sk=... --deploy-key=... --frontend-api-url=... --site-name=... [--convex-url=...]
+ *   node scripts/deploy.mjs vercel-deploy
+ */
+
+import { createClerkClient } from '@clerk/backend';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { execSync, spawnSync } from 'node:child_process';
+import {
+  isDopplerEnabled,
+  createServiceToken,
+  revokeServiceToken,
+  setSecret,
+  downloadSecrets,
+} from './lib/doppler.mjs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const ROOT_DIR = path.join(__dirname, '..');
+const ENV_FILE = path.join(ROOT_DIR, '.env.local');
+
+// Template repo identifiers used to detect upstream origin
+const TEMPLATE_REPOS = [
+  'harperaa/secure-vibe-coding-OS',
+  'harperaa/secure-vibe-coding-os',
+];
+
+// ---------------------------------------------------------------------------
+// Argument Parsing (same pattern as setup.mjs)
+// ---------------------------------------------------------------------------
+
+function parseArgs(argv) {
+  const args = {};
+  for (const arg of argv.slice(2)) {
+    if (arg.startsWith('--')) {
+      const eqIndex = arg.indexOf('=');
+      if (eqIndex !== -1) {
+        args[arg.slice(2, eqIndex)] = arg.slice(eqIndex + 1);
+      } else {
+        args[arg.slice(2)] = 'true';
+      }
+    } else if (!args._cmd) {
+      args._cmd = arg;
+    }
+  }
+  return args;
+}
+
+// ---------------------------------------------------------------------------
+// .env.local Helpers (same pattern as setup.mjs)
+// ---------------------------------------------------------------------------
+
+function readEnvFile(filePath) {
+  if (!fs.existsSync(filePath)) return '';
+  return fs.readFileSync(filePath, 'utf-8');
+}
+
+function getEnvValue(content, key) {
+  const regex = new RegExp(`^${key}=(.*)$`, 'm');
+  const match = content.match(regex);
+  return match ? match[1] : null;
+}
+
+// ---------------------------------------------------------------------------
+// Shell Helpers
+// ---------------------------------------------------------------------------
+
+function tryExec(cmd, options = {}) {
+  try {
+    return execSync(cmd, {
+      cwd: ROOT_DIR,
+      encoding: 'utf-8',
+      stdio: 'pipe',
+      timeout: 30000,
+      ...options,
+    }).trim();
+  } catch (err) {
+    return null;
+  }
+}
+
+function tryExecResult(cmd, options = {}) {
+  try {
+    const stdout = execSync(cmd, {
+      cwd: ROOT_DIR,
+      encoding: 'utf-8',
+      stdio: 'pipe',
+      timeout: 30000,
+      ...options,
+    }).trim();
+    return { success: true, stdout };
+  } catch (err) {
+    return {
+      success: false,
+      stdout: (err.stdout || '').trim(),
+      stderr: (err.stderr || '').trim(),
+      exitCode: err.status,
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// check-tools Subcommand
+// ---------------------------------------------------------------------------
+
+async function runCheckTools() {
+  const platform = os.platform();
+  const result = {
+    os: platform,
+    tools: {},
+    installed: [],
+    missing: [],
+    gitRemote: null,
+    isUpstreamTemplate: false,
+    needsRepo: false,
+  };
+
+  // Node.js version
+  const nodeVersion = tryExec('node -v');
+  if (nodeVersion) {
+    result.tools.node = nodeVersion.replace('v', '');
+  }
+
+  // Git version
+  const gitVersion = tryExec('git --version');
+  if (gitVersion) {
+    const match = gitVersion.match(/(\d+\.\d+\.\d+)/);
+    result.tools.git = match ? match[1] : gitVersion;
+  } else {
+    result.missing.push('git');
+  }
+
+  // gh CLI
+  const ghVersion = tryExec('gh --version');
+  if (ghVersion) {
+    const match = ghVersion.match(/(\d+\.\d+\.\d+)/);
+    result.tools.gh = match ? match[1] : ghVersion;
+
+    // Check gh auth
+    const ghAuth = tryExecResult('gh auth status');
+    result.tools.ghAuth = ghAuth.success;
+  } else {
+    result.tools.gh = null;
+    result.tools.ghAuth = false;
+    result.missing.push('gh');
+  }
+
+  // Vercel CLI
+  const vercelVersion = tryExec('npx vercel --version');
+  if (vercelVersion) {
+    const match = vercelVersion.match(/(\d+\.\d+\.\d+)/);
+    result.tools.vercel = match ? match[1] : vercelVersion;
+  } else {
+    result.tools.vercel = null;
+    result.missing.push('vercel');
+  }
+
+  // Git remote origin
+  const remoteUrl = tryExec('git remote get-url origin');
+  result.gitRemote = remoteUrl;
+
+  if (remoteUrl) {
+    result.isUpstreamTemplate = TEMPLATE_REPOS.some(
+      repo => remoteUrl.toLowerCase().includes(repo.toLowerCase())
+    );
+  }
+
+  result.needsRepo = result.isUpstreamTemplate || !remoteUrl;
+
+  console.log(JSON.stringify(result, null, 2));
+}
+
+// ---------------------------------------------------------------------------
+// gh-context Subcommand
+// Returns the authenticated GitHub username, token scopes (incl. whether the
+// "workflow" scope is granted), and the orgs the user belongs to. Consumed by
+// /deploy-to-dev to confirm the right account/org BEFORE creating any repo.
+// ---------------------------------------------------------------------------
+
+async function runGhContext() {
+  const result = {
+    success: false,
+    ghInstalled: false,
+    ghAuthenticated: false,
+    username: null,
+    scopes: [],
+    hasWorkflowScope: false,
+    orgs: [],
+  };
+
+  if (!tryExec('gh --version')) {
+    result.error = 'gh_not_installed';
+    result.hint = os.platform() === 'darwin'
+      ? 'brew install gh'
+      : 'See https://cli.github.com/manual/installation';
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  result.ghInstalled = true;
+
+  // gh auth status writes to stderr; capture both via tryExecResult
+  const status = tryExecResult('gh auth status');
+  if (!status.success) {
+    result.error = 'gh_not_authenticated';
+    result.hint = 'Run: gh auth login';
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  result.ghAuthenticated = true;
+
+  // Parse scopes from `gh auth status` output. Format example:
+  //   "Token scopes: 'gist', 'read:org', 'repo', 'workflow'"
+  const statusText = `${status.stdout || ''}\n${status.stderr || ''}`;
+  const scopeLine = statusText.match(/Token scopes?:\s*(.+)/i);
+  if (scopeLine) {
+    result.scopes = scopeLine[1]
+      .split(',')
+      .map(s => s.trim().replace(/^['"]|['"]$/g, ''))
+      .filter(Boolean);
+  }
+  result.hasWorkflowScope = result.scopes.includes('workflow');
+
+  // Authenticated username
+  const username = tryExec('gh api user --jq .login');
+  if (username) result.username = username.trim();
+
+  // Orgs the user is a member of
+  const orgsOut = tryExec("gh api user/orgs --jq '.[].login'");
+  if (orgsOut) {
+    result.orgs = orgsOut.split('\n').map(s => s.trim()).filter(Boolean);
+  }
+
+  result.success = !!(result.username);
+  console.log(JSON.stringify(result, null, 2));
+}
+
+// ---------------------------------------------------------------------------
+// github-setup Subcommand
+// ---------------------------------------------------------------------------
+
+async function runGithubSetup(args) {
+  const repoName = args['repo-name'];
+  // Optional: target owner (user or org). When provided, the repo is created as
+  // OWNER/REPO so it lands under that org instead of the authenticated user's
+  // personal account. Without OWNER/, `gh repo create REPO` always uses the
+  // user's account, which has caused org-targeted deploys to land personally.
+  const owner = args['owner'];
+
+  if (!repoName) {
+    console.error(JSON.stringify({
+      success: false,
+      error: 'Missing required argument: --repo-name',
+    }));
+    process.exit(1);
+  }
+
+  const result = {
+    success: true,
+    steps: [],
+    repoUrl: null,
+    remoteUrl: null,
+    requestedOwner: owner || null,
+    actualOwner: null,
+    upstreamPreserved: false,
+  };
+
+  // Check gh is installed
+  const ghVersion = tryExec('gh --version');
+  if (!ghVersion) {
+    console.log(JSON.stringify({
+      success: false,
+      error: 'gh_not_installed',
+      installHint: os.platform() === 'darwin' ? 'brew install gh' : 'See https://cli.github.com/manual/installation',
+    }));
+    return;
+  }
+
+  // Check gh auth
+  const ghAuth = tryExecResult('gh auth status');
+  if (!ghAuth.success) {
+    console.log(JSON.stringify({
+      success: false,
+      error: 'gh_not_authenticated',
+      hint: 'Run: gh auth login',
+    }));
+    return;
+  }
+
+  // Check if origin points to template — rename to upstream
+  const currentOrigin = tryExec('git remote get-url origin');
+  if (currentOrigin) {
+    const isTemplate = TEMPLATE_REPOS.some(
+      repo => currentOrigin.toLowerCase().includes(repo.toLowerCase())
+    );
+
+    if (isTemplate) {
+      // Check if upstream already exists
+      const existingUpstream = tryExec('git remote get-url upstream');
+      if (!existingUpstream) {
+        tryExec('git remote rename origin upstream');
+        result.upstreamPreserved = true;
+        result.steps.push('Renamed template origin to upstream');
+      } else {
+        // upstream already exists, just remove origin
+        tryExec('git remote remove origin');
+        result.upstreamPreserved = true;
+        result.steps.push('Removed template origin (upstream already exists)');
+      }
+    } else {
+      // Origin exists but isn't template — user may already have their own repo
+      console.log(JSON.stringify({
+        success: false,
+        error: 'origin_exists',
+        currentOrigin,
+        hint: 'Origin remote already points to a non-template repo. Remove it first if you want to create a new one.',
+      }));
+      return;
+    }
+  }
+
+  // Create private repo via gh CLI. When OWNER is given, pass OWNER/REPO so the
+  // repo is created under that user or org. Without OWNER/, gh always defaults
+  // to the authenticated user's personal account.
+  const repoArg = owner ? `${owner}/${repoName}` : repoName;
+  const createResult = tryExecResult(
+    `gh repo create "${repoArg}" --private --source=. --remote=origin --push`,
+    { timeout: 60000 }
+  );
+
+  if (!createResult.success) {
+    const errorOutput = createResult.stderr || createResult.stdout || '';
+    let error = 'repo_create_failed';
+    if (errorOutput.includes('already exists')) {
+      error = 'repo_exists';
+    }
+    console.log(JSON.stringify({
+      success: false,
+      error,
+      requestedOwner: owner || null,
+      detail: errorOutput.substring(0, 500),
+    }));
+    return;
+  }
+
+  result.steps.push('Created private GitHub repository');
+
+  // Get the new remote URL
+  const newOrigin = tryExec('git remote get-url origin');
+  result.remoteUrl = newOrigin;
+
+  // Derive repo URL from remote
+  if (newOrigin) {
+    result.repoUrl = newOrigin
+      .replace(/\.git$/, '')
+      .replace(/^git@github\.com:/, 'https://github.com/');
+
+    // Extract the actual owner from the new remote URL and verify it matches.
+    // GitHub usernames/orgs are case-preserved but URL matches are
+    // case-insensitive, so compare with toLowerCase.
+    const ownerMatch = newOrigin.match(/github\.com[:/]([^/]+)\//);
+    result.actualOwner = ownerMatch ? ownerMatch[1] : null;
+
+    if (owner && result.actualOwner &&
+        result.actualOwner.toLowerCase() !== owner.toLowerCase()) {
+      // The repo was created somewhere other than what /deploy-to-dev intended
+      // (the historical bug — personal account instead of the selected org).
+      console.log(JSON.stringify({
+        success: false,
+        error: 'owner_mismatch',
+        requestedOwner: owner,
+        actualOwner: result.actualOwner,
+        remoteUrl: newOrigin,
+        hint: `Repo landed under '${result.actualOwner}' instead of '${owner}'. Delete it (gh repo delete ${result.actualOwner}/${repoName} --yes) or transfer it (gh repo transfer ${result.actualOwner}/${repoName} ${owner}), then re-run /deploy-to-dev.`,
+      }, null, 2));
+      return;
+    }
+  }
+
+  result.steps.push(`New origin: ${newOrigin}`);
+  console.log(JSON.stringify(result, null, 2));
+}
+
+// ---------------------------------------------------------------------------
+// convex-deploy-key Subcommand
+// ---------------------------------------------------------------------------
+
+async function runConvexDeployKey() {
+  const result = {
+    success: false,
+    steps: [],
+  };
+
+  // Step 1: Read auth token from ~/.convex/config.json
+  const convexConfigPath = path.join(os.homedir(), '.convex', 'config.json');
+  if (!fs.existsSync(convexConfigPath)) {
+    console.log(JSON.stringify({
+      success: false,
+      error: 'not_logged_in',
+      hint: 'Run: npx convex dev to log in first',
+    }));
+    return;
+  }
+
+  let convexConfig;
+  try {
+    convexConfig = JSON.parse(fs.readFileSync(convexConfigPath, 'utf-8'));
+  } catch {
+    console.log(JSON.stringify({
+      success: false,
+      error: 'config_parse_error',
+      hint: 'Could not parse ~/.convex/config.json. Try running: npx convex dev',
+    }));
+    return;
+  }
+
+  const accessToken = convexConfig.accessToken;
+  if (!accessToken) {
+    console.log(JSON.stringify({
+      success: false,
+      error: 'not_logged_in',
+      hint: 'No access token found. Run: npx convex dev to log in',
+    }));
+    return;
+  }
+
+  result.steps.push('Read Convex access token from config');
+
+  // Step 2: Read dev deployment name from .env.local
+  const envContent = readEnvFile(ENV_FILE);
+  const devDeployment = getEnvValue(envContent, 'CONVEX_DEPLOYMENT');
+
+  if (!devDeployment || devDeployment.includes('your_') || devDeployment === '') {
+    console.log(JSON.stringify({
+      success: false,
+      error: 'no_dev_deployment',
+      hint: 'CONVEX_DEPLOYMENT not found in .env.local. Run: npx convex dev first',
+    }));
+    return;
+  }
+
+  // Strip prefix (e.g., "dev:" prefix)
+  const devName = devDeployment.replace(/^dev:/, '');
+  result.steps.push(`Found dev deployment: ${devName}`);
+
+  const headers = {
+    'Authorization': `Bearer ${accessToken}`,
+    'Convex-Client': 'deploy-script',
+    'Content-Type': 'application/json',
+  };
+
+  // Step 3: Get deployment info to find project ID
+  let projectId;
+  try {
+    const deployResp = await fetch(`https://api.convex.dev/api/deployments/${devName}`, {
+      headers,
+    });
+
+    if (!deployResp.ok) {
+      if (deployResp.status === 401 || deployResp.status === 403) {
+        console.log(JSON.stringify({
+          success: false,
+          error: 'auth_expired',
+          hint: 'Convex auth token expired. Run: npx convex dev to refresh',
+        }));
+        return;
+      }
+      throw new Error(`API returned ${deployResp.status}: ${await deployResp.text()}`);
+    }
+
+    const deployInfo = await deployResp.json();
+    projectId = deployInfo.projectId;
+    result.steps.push(`Found project ID: ${projectId}`);
+  } catch (err) {
+    console.log(JSON.stringify({
+      success: false,
+      error: 'api_error',
+      detail: err.message,
+      hint: 'Could not get deployment info from Convex API',
+    }));
+    return;
+  }
+
+  // Step 4: List deployments to find the production one
+  let prodDeploymentName;
+  try {
+    const listResp = await fetch(`https://api.convex.dev/api/projects/${projectId}/deployments`, {
+      headers,
+    });
+
+    if (!listResp.ok) {
+      throw new Error(`API returned ${listResp.status}: ${await listResp.text()}`);
+    }
+
+    const deployments = await listResp.json();
+    const prodDeployment = (deployments || []).find(
+      d => d.deploymentType === 'prod'
+    );
+
+    if (!prodDeployment) {
+      console.log(JSON.stringify({
+        success: false,
+        error: 'no_prod_deployment',
+        hint: 'No production deployment found. Create one in Convex Dashboard → Settings → Deploy Keys',
+      }));
+      return;
+    }
+
+    prodDeploymentName = prodDeployment.name;
+    result.steps.push(`Found production deployment: ${prodDeploymentName}`);
+  } catch (err) {
+    console.log(JSON.stringify({
+      success: false,
+      error: 'api_error',
+      detail: err.message,
+      hint: 'Could not list deployments from Convex API',
+    }));
+    return;
+  }
+
+  // Step 5: Create deploy key for the production deployment
+  try {
+    const keyResp = await fetch(
+      `https://api.convex.dev/api/deployments/${prodDeploymentName}/create_deploy_key`,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ name: 'Production - auto-generated' }),
+      }
+    );
+
+    if (!keyResp.ok) {
+      throw new Error(`API returned ${keyResp.status}: ${await keyResp.text()}`);
+    }
+
+    const keyData = await keyResp.json();
+    const deployKey = keyData.key || keyData.deployKey;
+
+    if (!deployKey) {
+      throw new Error('No deploy key in API response');
+    }
+
+    result.success = true;
+    result.deployKey = deployKey;
+    result.prodDeploymentName = prodDeploymentName;
+    result.steps.push('Generated production deploy key');
+  } catch (err) {
+    console.log(JSON.stringify({
+      success: false,
+      error: 'key_creation_failed',
+      detail: err.message,
+      hint: 'Could not create deploy key. Try generating one manually in Convex Dashboard → Settings → Deploy Keys',
+    }));
+    return;
+  }
+
+  console.log(JSON.stringify(result, null, 2));
+}
+
+// ---------------------------------------------------------------------------
+// validate-keys Subcommand
+// ---------------------------------------------------------------------------
+
+async function runValidateKeys(args) {
+  const clerkPk = args['clerk-pk'];
+  const clerkSk = args['clerk-sk'];
+  const deployKey = args['deploy-key'];
+
+  if (!clerkPk || !clerkSk) {
+    console.error(JSON.stringify({
+      success: false,
+      error: 'Missing required arguments: --clerk-pk and --clerk-sk',
+    }));
+    process.exit(1);
+  }
+
+  const result = {
+    success: true,
+    steps: [],
+    frontendApiUrl: null,
+    jwtTemplateCreated: false,
+  };
+
+  // Validate key prefixes (accept both dev and prod keys)
+  const requireProd = args['require-prod'] === 'true';
+  const validPkPrefixes = requireProd ? ['pk_live_'] : ['pk_test_', 'pk_live_'];
+  const validSkPrefixes = requireProd ? ['sk_live_'] : ['sk_test_', 'sk_live_'];
+
+  if (!validPkPrefixes.some(p => clerkPk.startsWith(p))) {
+    console.log(JSON.stringify({
+      success: false,
+      error: 'invalid_pk',
+      hint: requireProd
+        ? 'Publishable key must start with pk_live_ for production'
+        : 'Publishable key must start with pk_test_ or pk_live_',
+    }));
+    return;
+  }
+
+  if (!validSkPrefixes.some(p => clerkSk.startsWith(p))) {
+    console.log(JSON.stringify({
+      success: false,
+      error: 'invalid_sk',
+      hint: requireProd
+        ? 'Secret key must start with sk_live_ for production'
+        : 'Secret key must start with sk_test_ or sk_live_',
+    }));
+    return;
+  }
+
+  const keyType = clerkPk.startsWith('pk_live_') ? 'production' : 'development';
+  result.keyType = keyType;
+  result.steps.push(`Key prefixes validated (${keyType} keys)`);
+
+  // Validate deploy key format if provided
+  if (deployKey) {
+    if (!deployKey.startsWith('prod:') || !deployKey.includes('|')) {
+      console.log(JSON.stringify({
+        success: false,
+        error: 'invalid_deploy_key',
+        hint: 'Deploy key must start with prod: and contain | separator',
+      }));
+      return;
+    }
+    result.steps.push('Deploy key format validated');
+  }
+
+  // Test Clerk API with production keys
+  const clerk = createClerkClient({ secretKey: clerkSk });
+  try {
+    await clerk.users.getCount();
+    result.steps.push('Clerk production API connection verified');
+  } catch (err) {
+    console.log(JSON.stringify({
+      success: false,
+      error: 'clerk_api_failed',
+      detail: err.message,
+      hint: 'Could not connect to Clerk with production keys. Verify the keys are correct.',
+    }));
+    return;
+  }
+
+  // Derive frontend API URL from pk_live_ (same pattern as setup.mjs)
+  try {
+    const pkParts = clerkPk.split('_');
+    const encoded = pkParts[pkParts.length - 1];
+    const decoded = Buffer.from(encoded, 'base64').toString('utf-8');
+    const cleanDomain = decoded.replace(/\$$/, '');
+    if (cleanDomain.includes('.clerk.accounts.') || cleanDomain.includes('.clerk.')) {
+      result.frontendApiUrl = `https://${cleanDomain}`;
+    } else {
+      result.frontendApiUrl = `https://${cleanDomain}.clerk.accounts.dev`;
+    }
+    result.steps.push(`Derived frontend API URL: ${result.frontendApiUrl}`);
+  } catch (err) {
+    result.steps.push(`Warning: Could not derive frontend API URL: ${err.message}`);
+  }
+
+  // Create JWT template "convex" on production instance (idempotent)
+  try {
+    const existingTemplates = await clerk.jwtTemplates.list();
+    const convexTemplate = existingTemplates.data?.find(
+      t => t.name?.toLowerCase() === 'convex'
+    );
+
+    // 300s (5m) — see the rationale in scripts/setup.mjs; dev and prod must match.
+    const CONVEX_JWT_LIFETIME_SEC = 300;
+    if (convexTemplate) {
+      // Converge in BOTH directions: a `<` test would only ever raise the
+      // lifetime, silently skipping templates already set to a longer value.
+      const needsUpdate =
+        Number(convexTemplate.lifetime) !== CONVEX_JWT_LIFETIME_SEC ||
+        convexTemplate.claims?.aud !== 'convex';
+      if (needsUpdate) {
+        await clerk.jwtTemplates.update({
+          templateId: convexTemplate.id,
+          name: 'convex',
+          claims: { aud: 'convex' },
+          lifetime: CONVEX_JWT_LIFETIME_SEC,
+        });
+        result.jwtTemplateCreated = false;
+        result.steps.push(
+          `Updated JWT template "convex" on production (lifetime ${CONVEX_JWT_LIFETIME_SEC}s)`
+        );
+      } else {
+        result.steps.push('JWT template "convex" already exists on production');
+        result.jwtTemplateCreated = false;
+      }
+    } else {
+      await clerk.jwtTemplates.create({
+        name: 'convex',
+        claims: { aud: 'convex' },
+        lifetime: CONVEX_JWT_LIFETIME_SEC,
+      });
+      result.jwtTemplateCreated = true;
+      result.steps.push(
+        `Created JWT template "convex" on production (lifetime ${CONVEX_JWT_LIFETIME_SEC}s)`
+      );
+    }
+  } catch (err) {
+    result.steps.push(`Warning: JWT template creation failed: ${err.message}`);
+    result.jwtTemplateCreated = false;
+  }
+
+  console.log(JSON.stringify(result, null, 2));
+}
+
+// ---------------------------------------------------------------------------
+// convex-deploy-functions Subcommand
+// ---------------------------------------------------------------------------
+
+async function runConvexDeployFunctions(args) {
+  const deployKey = args['deploy-key'];
+
+  if (!deployKey) {
+    console.error(JSON.stringify({
+      success: false,
+      error: 'Missing required argument: --deploy-key',
+    }));
+    process.exit(1);
+  }
+
+  const result = {
+    success: false,
+    steps: [],
+  };
+
+  try {
+    const output = execSync('npx convex deploy', {
+      cwd: ROOT_DIR,
+      encoding: 'utf-8',
+      stdio: 'pipe',
+      timeout: 120000,
+      env: {
+        ...process.env,
+        CONVEX_DEPLOY_KEY: deployKey,
+      },
+    });
+
+    result.success = true;
+    result.steps.push('Convex functions deployed to production');
+
+    // Try to extract production URL from output or derive from deploy key
+    const deploymentName = deployKey.split('|')[0].replace('prod:', '');
+    result.prodUrl = `https://${deploymentName}.convex.cloud`;
+    result.prodSiteUrl = `https://${deploymentName}.convex.site`;
+    result.steps.push(`Production URL: ${result.prodUrl}`);
+    result.steps.push(`HTTP Actions URL: ${result.prodSiteUrl}`);
+
+    if (output) {
+      const lines = output.split('\n').filter(l => l.trim());
+      if (lines.length > 0) {
+        result.steps.push(`CLI output: ${lines.slice(-3).join(' | ')}`);
+      }
+    }
+  } catch (err) {
+    const errOutput = ((err.stdout || '') + (err.stderr || '')).trim();
+    console.log(JSON.stringify({
+      success: false,
+      error: 'deploy_failed',
+      detail: errOutput.substring(0, 1000),
+      hint: 'Convex deploy failed. Check that the deploy key is valid.',
+    }));
+    return;
+  }
+
+  console.log(JSON.stringify(result, null, 2));
+}
+
+// ---------------------------------------------------------------------------
+// prod-webhook Subcommand
+// ---------------------------------------------------------------------------
+
+async function runProdWebhook(args) {
+  const clerkSk = args['clerk-sk'];
+  const convexSiteUrl = args['convex-site-url'];
+  const adminEmail = args['admin-email'];
+
+  if (!clerkSk || !convexSiteUrl) {
+    console.error(JSON.stringify({
+      success: false,
+      error: 'Missing required arguments: --clerk-sk and --convex-site-url',
+    }));
+    process.exit(1);
+  }
+
+  const result = {
+    success: false,
+    steps: [],
+    webhookSecret: null,
+    endpointUrl: null,
+  };
+
+  const webhookEndpointUrl = `${convexSiteUrl}/clerk-users-webhook`;
+  result.endpointUrl = webhookEndpointUrl;
+
+  const clerk = createClerkClient({ secretKey: clerkSk });
+
+  try {
+    // Ensure Svix app exists
+    try {
+      await clerk.webhooks.createSvixApp();
+      result.steps.push('Created Svix app for Clerk production webhooks');
+    } catch {
+      result.steps.push('Svix app already configured');
+    }
+
+    // Get one-time token from Clerk's Svix auth URL
+    const svixAuth = await clerk.webhooks.generateSvixAuthURL();
+    const svixUrl = svixAuth.svix_url;
+    const keyMatch = svixUrl.match(/key=([^&]+)/);
+    if (!keyMatch) throw new Error('Could not extract key from Svix auth URL');
+
+    const decoded = JSON.parse(Buffer.from(keyMatch[1], 'base64').toString('utf-8'));
+    const { appId, oneTimeToken, region } = decoded;
+    const svixBaseUrl = region === 'eu' ? 'https://api.eu.svix.com' : 'https://api.svix.com';
+
+    // Exchange one-time token for Svix API token
+    const tokenResp = await fetch(`${svixBaseUrl}/api/v1/auth/one-time-token/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ oneTimeToken, appId }),
+    });
+    if (!tokenResp.ok) {
+      throw new Error(`Svix token exchange failed: ${tokenResp.status} ${await tokenResp.text()}`);
+    }
+    const { token: svixToken } = await tokenResp.json();
+    result.steps.push('Exchanged Svix one-time token for API token');
+
+    // Create Svix client
+    const { Svix } = await import('svix');
+    const svix = new Svix(svixToken, { serverUrl: svixBaseUrl });
+
+    // Check for existing endpoint with same URL (idempotent)
+    const existing = await svix.endpoint.list(appId);
+    const existingEp = existing.data?.find(ep => ep.url === webhookEndpointUrl);
+
+    let endpointId;
+    if (existingEp) {
+      endpointId = existingEp.id;
+      result.steps.push('Production webhook endpoint already exists, reusing');
+    } else {
+      const endpoint = await svix.endpoint.create(appId, {
+        url: webhookEndpointUrl,
+        description: 'Convex clerk-users-webhook (production)',
+        filterTypes: [
+          'user.created',
+          'user.updated',
+          'user.deleted',
+          'paymentAttempt.updated',
+        ],
+      });
+      endpointId = endpoint.id;
+      result.steps.push('Created production webhook endpoint via Svix');
+    }
+
+    // Get the webhook signing secret
+    const secret = await svix.endpoint.getSecret(appId, endpointId);
+    result.webhookSecret = secret.key;
+    result.success = true;
+    result.steps.push(`Retrieved webhook signing secret: ${result.webhookSecret.substring(0, 10)}...`);
+  } catch (err) {
+    result.steps.push(`Webhook creation failed: ${err.message}`);
+    result.manualSteps = [
+      'Create webhook manually in Clerk Dashboard (Production):',
+      `  1. Go to Clerk Dashboard → Configure → Webhooks → Add Endpoint`,
+      `  2. Endpoint URL: ${webhookEndpointUrl}`,
+      `  3. Subscribe to events: user.created, user.updated, user.deleted, paymentAttempt.updated`,
+      `  4. Click Create, copy the Signing Secret (whsec_...)`,
+    ];
+  }
+
+  console.log(JSON.stringify(result, null, 2));
+}
+
+// ---------------------------------------------------------------------------
+// convex-prod-env Subcommand
+// ---------------------------------------------------------------------------
+
+async function runConvexProdEnv(args) {
+  const deployKey = args['deploy-key'];
+  const webhookSecret = args['webhook-secret'];
+  const frontendApiUrl = args['frontend-api-url'];
+  const adminEmail = args['admin-email'];
+
+  if (!deployKey) {
+    console.error(JSON.stringify({
+      success: false,
+      error: 'Missing required argument: --deploy-key',
+    }));
+    process.exit(1);
+  }
+
+  const result = {
+    success: true,
+    steps: [],
+    varsSet: [],
+  };
+
+  const envVars = {};
+  if (webhookSecret) envVars['CLERK_WEBHOOK_SECRET'] = webhookSecret;
+  if (frontendApiUrl) {
+    envVars['NEXT_PUBLIC_CLERK_FRONTEND_API_URL'] = frontendApiUrl;
+    envVars['CLERK_JWT_ISSUER_DOMAIN'] = frontendApiUrl;
+  }
+  if (adminEmail) envVars['ADMIN_EMAIL'] = adminEmail;
+
+  for (const [key, value] of Object.entries(envVars)) {
+    try {
+      execSync(`npx convex env set ${key} "${value}"`, {
+        cwd: ROOT_DIR,
+        stdio: 'pipe',
+        timeout: 30000,
+        env: {
+          ...process.env,
+          CONVEX_DEPLOY_KEY: deployKey,
+        },
+      });
+      result.varsSet.push(key);
+      result.steps.push(`Set Convex production env var: ${key}`);
+    } catch (err) {
+      result.steps.push(`Failed to set ${key}: ${err.message}`);
+      result.success = false;
+    }
+  }
+
+  console.log(JSON.stringify(result, null, 2));
+}
+
+// ---------------------------------------------------------------------------
+// vercel-env-dev Subcommand (reads everything from .env.local, no args needed)
+// ---------------------------------------------------------------------------
+
+async function runVercelEnvDev() {
+  // Doppler mode: only DOPPLER_TOKEN ever lives in Vercel; everything else
+  // is fetched at build/runtime. Delegate to the Doppler-aware subcommand.
+  if (isDopplerEnabled()) {
+    return runVercelEnvDoppler({ env: 'development', config: 'dev' });
+  }
+
+  // Legacy-mode gate: same as Doppler mode but the marker lives in Vercel
+  // env (production target) instead of Doppler. See checkProdPromoted().
+  const cliArgs = parseArgs(process.argv);
+  const forceOverwriteProd = cliArgs['force-overwrite-prod'] === 'true';
+  if (!forceOverwriteProd) {
+    const { promoted, promotedAt } = checkProdPromoted();
+    if (promoted) {
+      emitProdPromotedGateError(promotedAt);
+      process.exit(1);
+    }
+  }
+
+  const result = {
+    success: true,
+    steps: [],
+    varsSet: [],
+  };
+
+  const envContent = readEnvFile(ENV_FILE);
+
+  // Keys to read from .env.local and set on Vercel
+  const keysToRead = [
+    'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY',
+    'CLERK_SECRET_KEY',
+    'NEXT_PUBLIC_CLERK_FRONTEND_API_URL',
+    'NEXT_PUBLIC_CONVEX_URL',
+    'NEXT_PUBLIC_SITE_NAME',
+    'CSRF_SECRET',
+    'SESSION_SECRET',
+    'NEXT_PUBLIC_CLERK_SIGN_IN_FORCE_REDIRECT_URL',
+    'NEXT_PUBLIC_CLERK_SIGN_UP_FORCE_REDIRECT_URL',
+    'NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL',
+    'NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL',
+  ];
+
+  // Optional keys
+  const optionalKeys = ['GEMINI_API_KEY'];
+
+  const envVars = {};
+
+  for (const key of keysToRead) {
+    const val = getEnvValue(envContent, key);
+    if (val && val.trim() && !val.includes('your_') && !val.includes('<')) {
+      envVars[key] = val;
+    } else {
+      result.steps.push(`Warning: ${key} not found or is a placeholder in .env.local`);
+    }
+  }
+
+  for (const key of optionalKeys) {
+    const val = getEnvValue(envContent, key);
+    if (val && val.trim()) {
+      envVars[key] = val;
+    }
+  }
+
+  if (Object.keys(envVars).length === 0) {
+    console.log(JSON.stringify({
+      success: false,
+      error: 'no_env_vars',
+      hint: 'No valid environment variables found in .env.local. Run /install first.',
+    }));
+    return;
+  }
+
+  for (const [key, value] of Object.entries(envVars)) {
+    try {
+      execSync(`printf '%s' "${value.replace(/"/g, '\\"')}" | npx vercel env add ${key} production --force`, {
+        cwd: ROOT_DIR,
+        stdio: 'pipe',
+        timeout: 30000,
+      });
+      result.varsSet.push(key);
+      result.steps.push(`Set Vercel env var: ${key}`);
+    } catch (err) {
+      const errMsg = ((err.stderr || '') + (err.stdout || '')).trim();
+      result.steps.push(`Failed to set ${key}: ${errMsg.substring(0, 200)}`);
+      result.success = false;
+    }
+  }
+
+  console.log(JSON.stringify(result, null, 2));
+}
+
+// ---------------------------------------------------------------------------
+// vercel-env Subcommand
+// ---------------------------------------------------------------------------
+
+async function runVercelEnv(args) {
+  // Doppler mode: only DOPPLER_TOKEN lives in Vercel — production keys are
+  // sourced from the Doppler `prd` config at build/runtime, not pushed here.
+  if (isDopplerEnabled()) {
+    return runVercelEnvDoppler({ env: 'production', config: 'prd' });
+  }
+
+  const clerkPk = args['clerk-pk'];
+  const clerkSk = args['clerk-sk'];
+  const deployKey = args['deploy-key'];
+  const frontendApiUrl = args['frontend-api-url'];
+  const siteName = args['site-name'];
+
+  const convexUrl = args['convex-url'];
+
+  if (!clerkPk || !clerkSk || !deployKey || !frontendApiUrl || !siteName) {
+    console.error(JSON.stringify({
+      success: false,
+      error: 'Missing required arguments: --clerk-pk, --clerk-sk, --deploy-key, --frontend-api-url, --site-name',
+    }));
+    process.exit(1);
+  }
+
+  const result = {
+    success: true,
+    steps: [],
+    varsSet: [],
+  };
+
+  // Read secrets from .env.local (reuse existing ones)
+  const envContent = readEnvFile(ENV_FILE);
+  const csrfSecret = getEnvValue(envContent, 'CSRF_SECRET') || crypto.randomBytes(32).toString('base64url');
+  const sessionSecret = getEnvValue(envContent, 'SESSION_SECRET') || crypto.randomBytes(32).toString('base64url');
+
+  // Build the env vars map
+  const envVars = {
+    'CONVEX_DEPLOY_KEY': deployKey,
+    'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY': clerkPk,
+    'CLERK_SECRET_KEY': clerkSk,
+    'NEXT_PUBLIC_CLERK_FRONTEND_API_URL': frontendApiUrl,
+    'NEXT_PUBLIC_SITE_NAME': siteName,
+    'CSRF_SECRET': csrfSecret,
+    'SESSION_SECRET': sessionSecret,
+    'NEXT_PUBLIC_CLERK_SIGN_IN_FORCE_REDIRECT_URL': '/dashboard',
+    'NEXT_PUBLIC_CLERK_SIGN_UP_FORCE_REDIRECT_URL': '/dashboard',
+    'NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL': '/dashboard',
+    'NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL': '/dashboard',
+  };
+
+  // NEXT_PUBLIC_CONVEX_URL is needed at runtime for server-side code
+  // (middleware, rate limiting, CSRF validation use ConvexHttpClient)
+  if (convexUrl) {
+    envVars['NEXT_PUBLIC_CONVEX_URL'] = convexUrl;
+  }
+
+  // Optional: GEMINI_API_KEY if present
+  const geminiKey = getEnvValue(envContent, 'GEMINI_API_KEY');
+  if (geminiKey && geminiKey.trim()) {
+    envVars['GEMINI_API_KEY'] = geminiKey;
+  }
+
+  // Optional: Google OAuth credentials if provided
+  if (args['google-client-id']) {
+    envVars['GOOGLE_CLIENT_ID'] = args['google-client-id'];
+  }
+  if (args['google-client-secret']) {
+    envVars['GOOGLE_CLIENT_SECRET'] = args['google-client-secret'];
+  }
+
+  for (const [key, value] of Object.entries(envVars)) {
+    try {
+      // Use printf to avoid issues with special characters in values
+      execSync(`printf '%s' "${value.replace(/"/g, '\\"')}" | npx vercel env add ${key} production --force`, {
+        cwd: ROOT_DIR,
+        stdio: 'pipe',
+        timeout: 30000,
+      });
+      result.varsSet.push(key);
+      result.steps.push(`Set Vercel env var: ${key}`);
+    } catch (err) {
+      const errMsg = ((err.stderr || '') + (err.stdout || '')).trim();
+      result.steps.push(`Failed to set ${key}: ${errMsg.substring(0, 200)}`);
+      result.success = false;
+    }
+  }
+
+  // If this prod env push succeeded, drop the marker on Vercel's production
+  // target so a future legacy-mode /deploy-to-dev refuses to stomp it.
+  // (Doppler mode handles this in runVercelEnvDoppler.)
+  if (result.success) {
+    try {
+      const promotedAt = new Date().toISOString();
+      const r = markProdPromoted(promotedAt);
+      if (r.ok) {
+        result.steps.push(`Set _PROD_PROMOTED_AT=${promotedAt} (gates future /deploy-to-dev runs)`);
+      } else {
+        result.steps.push(`Warning: could not write _PROD_PROMOTED_AT marker: ${r.error}`);
+      }
+    } catch (err) {
+      result.steps.push(`Warning: could not write _PROD_PROMOTED_AT marker: ${err.message}`);
+    }
+  }
+
+  console.log(JSON.stringify(result, null, 2));
+}
+
+// ---------------------------------------------------------------------------
+// vercel-env-doppler Subcommand (Doppler mode — runtime fetch architecture)
+// ---------------------------------------------------------------------------
+//
+// In Doppler mode the only env vars in Vercel are DOPPLER_TOKEN (used by
+// scripts/vercel-prebuild.mjs at build time AND lib/secrets.ts at runtime)
+// and REVALIDATE_TOKEN (used by /api/revalidate-secrets). Everything else
+// is fetched from Doppler.
+//
+// Defaults to dev/development if --env or --config args are not provided,
+// so it's safe to invoke as `node scripts/deploy.mjs vercel-env-doppler`
+// from package.json's `deploy:vercel-env` script.
+
+async function runVercelEnvDoppler(opts = {}) {
+  const args = opts && opts.env ? opts : parseArgs(process.argv);
+  const vercelEnv = (args.env || 'development').toLowerCase();
+  const config = (args.config || (vercelEnv === 'production' ? 'prd' : 'dev')).toLowerCase();
+  const forceOverwriteProd = args['force-overwrite-prod'] === 'true' || opts.forceOverwriteProd === true;
+
+  if (vercelEnv !== 'development' && vercelEnv !== 'preview' && vercelEnv !== 'production') {
+    console.error(JSON.stringify({
+      success: false,
+      error: `Invalid --env "${vercelEnv}". Expected development|preview|production.`,
+    }));
+    process.exit(1);
+  }
+  if (config !== 'dev' && config !== 'prd') {
+    console.error(JSON.stringify({
+      success: false,
+      error: `Invalid --config "${config}". Expected dev|prd.`,
+    }));
+    process.exit(1);
+  }
+
+  // Gate: prevent /deploy-to-dev from stomping the production target after
+  // /deploy-to-prod has promoted it. Implementation in checkProdPromoted().
+  if (config === 'dev' && !forceOverwriteProd) {
+    const { promoted, promotedAt } = checkProdPromoted();
+    if (promoted) {
+      emitProdPromotedGateError(promotedAt);
+      process.exit(1);
+    }
+  }
+
+  // Preflight (prd only): Doppler `prd` must contain the runtime essentials before
+  // we push a prd-scoped token to Vercel. Without these, the production deploy will
+  // boot, fetch from Doppler at runtime, get nothing back, and 500 on first request.
+  // The /deploy-to-prod skill instructs the operator to seed `prd` with `doppler
+  // secrets set ... --config prd` before invoking deploy; this check enforces that.
+  if (config === 'prd') {
+    const REQUIRED_PRD_KEYS = [
+      'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY',
+      'CLERK_SECRET_KEY',
+      'NEXT_PUBLIC_CLERK_FRONTEND_API_URL',
+      'NEXT_PUBLIC_CONVEX_URL',
+      'NEXT_PUBLIC_SITE_NAME',
+      'CSRF_SECRET',
+      'SESSION_SECRET',
+    ];
+    let prdSecrets;
+    try {
+      prdSecrets = downloadSecrets('prd');
+    } catch (err) {
+      console.error(JSON.stringify({
+        success: false,
+        error: `Could not read Doppler prd config: ${err.message}`,
+      }));
+      process.exit(1);
+    }
+    const missing = REQUIRED_PRD_KEYS.filter(k => !prdSecrets[k]);
+    if (missing.length > 0) {
+      console.error(JSON.stringify({
+        success: false,
+        error: 'doppler_prd_incomplete',
+        message: `Doppler 'prd' config is missing required keys: ${missing.join(', ')}`,
+        missing,
+        hint: 'Seed Doppler prd before running /deploy-to-prod. For each missing key: doppler secrets set KEY="<value>" --config prd. See .claude/commands/deploy-to-prod.md for the full list (Clerk prod PK/SK/webhook, Convex prod URL/deploy key, NEXT_PUBLIC_SITE_NAME, CSRF_SECRET, SESSION_SECRET).',
+      }, null, 2));
+      process.exit(1);
+    }
+  }
+
+  const result = {
+    success: true,
+    mode: 'doppler',
+    vercelEnv,
+    dopplerConfig: config,
+    steps: [],
+    varsSet: [],
+  };
+
+  // 1. Issue a fresh service token for this Vercel environment.
+  //    Token name encodes config so dev/prd tokens never collide.
+  const tokenName = `vercel-runtime-${config}`;
+  // Revoke any existing token with the same name (idempotent — ignores absence)
+  // so re-running this command always produces a freshly-scoped credential.
+  revokeServiceToken(config, tokenName);
+  let dopplerToken;
+  try {
+    dopplerToken = createServiceToken(config, tokenName);
+    result.steps.push(`Issued Doppler service token (${tokenName}) for config=${config}`);
+  } catch (err) {
+    console.error(JSON.stringify({
+      success: false,
+      error: `Failed to create Doppler service token: ${err.message}`,
+    }));
+    process.exit(1);
+  }
+
+  // 2. Ensure REVALIDATE_TOKEN exists in Doppler. Generate one if absent so
+  //    the /api/revalidate-secrets route can authenticate calls from /rotate.
+  const dopplerSecrets = downloadSecrets(config);
+  let revalidateToken = dopplerSecrets.REVALIDATE_TOKEN;
+  if (!revalidateToken || revalidateToken.length < 32) {
+    revalidateToken = crypto.randomBytes(32).toString('base64url');
+    setSecret('REVALIDATE_TOKEN', revalidateToken, config);
+    result.steps.push(`Generated REVALIDATE_TOKEN in Doppler config=${config}`);
+  }
+
+  // 3. Push DOPPLER_TOKEN to Vercel. Which targets get it depends on the call:
+  //    - /deploy-to-dev (config=dev): push to ALL THREE Vercel targets
+  //      (development, preview, production) with the dev-scoped token. The
+  //      script invokes `vercel deploy --prod` to keep the project's primary
+  //      alias URL stable for dev testing — which makes it a "production-target"
+  //      build at the Vercel layer even though it uses dev credentials. So the
+  //      production target needs the dev token to make the prebuild fetch work.
+  //    - /deploy-to-prod (config=prd): push only to production with the
+  //      prd-scoped token. This intentionally overwrites the dev-scoped token
+  //      that /deploy-to-dev left there earlier — production deploys must use
+  //      prd Doppler config, not dev.
+  const targets = config === 'dev'
+    ? ['development', 'preview', 'production']
+    : ['production'];
+
+  for (const target of targets) {
+    const pushed = pushVercelEnvVar('DOPPLER_TOKEN', dopplerToken, target);
+    if (pushed.ok) {
+      result.varsSet.push(`DOPPLER_TOKEN (${target})`);
+      result.steps.push(`Set Vercel env var: DOPPLER_TOKEN (${target})`);
+    } else {
+      result.success = false;
+      result.steps.push(`Failed to set DOPPLER_TOKEN on ${target}: ${pushed.error}`);
+    }
+  }
+
+  // 4. Sync allowlisted secrets to Convex (no native Doppler integration).
+  try {
+    const sync = spawnSync(
+      'node',
+      ['scripts/sync-convex-env.mjs', `--config=${config}`],
+      { cwd: ROOT_DIR, encoding: 'utf-8', stdio: 'pipe' }
+    );
+    if (sync.status === 0) {
+      result.steps.push(`Synced Convex env (${config}): ${(sync.stdout || '').trim().split('\n').pop()}`);
+    } else {
+      result.success = false;
+      result.steps.push(`Convex sync failed: ${(sync.stderr || sync.stdout || '').trim()}`);
+    }
+  } catch (err) {
+    result.success = false;
+    result.steps.push(`Convex sync error: ${err.message}`);
+  }
+
+  // 4b. Re-push Convex so auth.config.ts picks up the env vars just synced.
+  //
+  // Syncing env vars does NOT activate Clerk as an auth provider: Convex
+  // evaluates auth.config.ts at push time, so provider config only changes when
+  // functions are pushed. Convex's docs: "You must run `npx convex dev` or
+  // `npx convex deploy` after adding a new provider to sync the configuration
+  // to your backend."
+  //
+  // This is the safety net for install -> deploy-to-dev where the user never
+  // ran local `convex dev`: without it the Vercel site's first login fails with
+  // "no auth provider found (no providers configured)".
+  //
+  // NOTE: `convex deploy` takes no --yes flag; the CLI hard-errors on unknown
+  // options, which would make this silently never run.
+  if (result.success !== false) {
+    const isProd = config === 'prd';
+    const cmd = isProd ? 'npx convex deploy' : 'npx convex dev --once';
+    let detail = '';
+    try {
+      execSync(cmd, { cwd: ROOT_DIR, encoding: 'utf-8', stdio: 'pipe', timeout: 180000 });
+    } catch (err) {
+      detail = ((err.stdout || '') + (err.stderr || '') + (err.message || '')).trim().substring(0, 800);
+    }
+    // Exit code is not evidence — verify what the deployment actually serves.
+    let live = false;
+    try {
+      const spec = JSON.parse(
+        execSync(`npx convex function-spec${isProd ? ' --prod' : ''}`, {
+          cwd: ROOT_DIR, encoding: 'utf-8', stdio: 'pipe', timeout: 60000,
+        })
+      );
+      live = Array.isArray(spec.functions) &&
+        spec.functions.some((f) => typeof f?.identifier === 'string' && f.identifier.startsWith('users.js:'));
+    } catch {
+      live = false;
+    }
+    if (live) {
+      result.steps.push(`Re-pushed Convex (${config}) so auth.config.ts picks up the Clerk issuer (verified live)`);
+    } else {
+      result.success = false;
+      result.error = 'convex_push_failed';
+      result.steps.push(
+        `Convex re-push after env sync failed (${config}): ${detail || 'no functions are being served'}`
+      );
+      result.steps.push(
+        `Warning: run \`${cmd}\` so auth.config.ts activates the Clerk issuer domain. ` +
+          'Until then, logging in on the deployed site fails with "no providers configured".'
+      );
+    }
+  }
+
+  // 5. If this was a successful prd run, drop a marker so a future
+  //    /deploy-to-dev knows the production target has been promoted and
+  //    refuses to overwrite it. See checkProdPromoted() for storage details.
+  if (config === 'prd' && result.success) {
+    try {
+      const promotedAt = new Date().toISOString();
+      const r = markProdPromoted(promotedAt);
+      if (r.ok) {
+        result.steps.push(`Set _PROD_PROMOTED_AT=${promotedAt} (gates future /deploy-to-dev runs)`);
+      } else {
+        result.steps.push(`Warning: could not write _PROD_PROMOTED_AT marker: ${r.error}`);
+      }
+    } catch (err) {
+      result.steps.push(`Warning: could not write _PROD_PROMOTED_AT marker: ${err.message}`);
+    }
+  }
+
+  console.log(JSON.stringify(result, null, 2));
+}
+
+// Helper: push a single value to Vercel env, replacing any existing one.
+function pushVercelEnvVar(key, value, vercelEnv) {
+  try {
+    // Best-effort remove first so `add` doesn't error on duplicates. For preview the
+    // empty-string branch positional means "all preview branches" (CLI 52 requirement).
+    const rmArgs = vercelEnv === 'preview'
+      ? ['vercel', 'env', 'rm', key, vercelEnv, '', '--yes']
+      : ['vercel', 'env', 'rm', key, vercelEnv, '--yes'];
+    spawnSync('npx', rmArgs, { cwd: ROOT_DIR, stdio: 'pipe', timeout: 30000 });
+
+    let add;
+    if (vercelEnv === 'preview') {
+      // Vercel CLI 52+ requires an explicit branch positional even for "all preview branches"
+      // (empty string ""), and `--value`/`--yes` instead of stdin. The stdin form falls
+      // through to an interactive branch prompt and dies on EOF.
+      add = spawnSync('npx', ['vercel', 'env', 'add', key, vercelEnv, '', '--value', value, '--yes'], {
+        cwd: ROOT_DIR,
+        encoding: 'utf-8',
+        timeout: 30000,
+      });
+    } else {
+      // development / production: stdin form keeps the value out of argv (so it doesn't
+      // surface in `ps` or shell history).
+      add = spawnSync('npx', ['vercel', 'env', 'add', key, vercelEnv], {
+        cwd: ROOT_DIR,
+        input: value,
+        encoding: 'utf-8',
+        timeout: 30000,
+      });
+    }
+    if (add.status !== 0) {
+      return { ok: false, error: ((add.stderr || '') + (add.stdout || '')).trim().slice(0, 200) };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Production-promoted gate (works in both Doppler and legacy modes)
+// ---------------------------------------------------------------------------
+//
+// Both /deploy-to-dev and /deploy-to-prod target the same Vercel project's
+// production target (the script uses `vercel deploy --prod` to keep the
+// primary URL stable for dev testing). After /deploy-to-prod has promoted
+// the production target, running /deploy-to-dev would replace prod-scoped
+// credentials with dev-scoped ones — the production URL would start serving
+// a dev build with test data to real users.
+//
+// To prevent that we drop a marker after a successful prod run and check it
+// at the start of the dev run. Storage location depends on mode:
+//   - Doppler mode: marker lives in Doppler `dev` (operator's local doppler
+//     login can read/write it; the marker is metadata, not a secret).
+//   - Legacy mode: marker is a regular Vercel env var on the production
+//     target — visible to all team members via `vercel env ls`.
+
+const PROD_PROMOTED_MARKER = '_PROD_PROMOTED_AT';
+
+function checkProdPromoted() {
+  if (isDopplerEnabled()) {
+    try {
+      const devSecrets = downloadSecrets('dev');
+      const promotedAt = devSecrets[PROD_PROMOTED_MARKER];
+      return promotedAt ? { promoted: true, promotedAt } : { promoted: false };
+    } catch {
+      return { promoted: false };
+    }
+  }
+  try {
+    const tmp = path.join(os.tmpdir(), `vercel-prod-marker-${Date.now()}.env`);
+    const r = spawnSync(
+      'npx',
+      ['vercel', 'env', 'pull', tmp, '--environment', 'production', '--yes'],
+      { cwd: ROOT_DIR, encoding: 'utf-8', timeout: 30000 }
+    );
+    if (r.status !== 0) return { promoted: false };
+    if (!fs.existsSync(tmp)) return { promoted: false };
+    const content = fs.readFileSync(tmp, 'utf-8');
+    try { fs.unlinkSync(tmp); } catch {}
+    const match = content.match(new RegExp(`^${PROD_PROMOTED_MARKER}="?([^"\\n]+)"?$`, 'm'));
+    return match ? { promoted: true, promotedAt: match[1] } : { promoted: false };
+  } catch {
+    return { promoted: false };
+  }
+}
+
+function markProdPromoted(timestamp) {
+  if (isDopplerEnabled()) {
+    setSecret(PROD_PROMOTED_MARKER, timestamp, 'dev');
+    return { ok: true };
+  }
+  return pushVercelEnvVar(PROD_PROMOTED_MARKER, timestamp, 'production');
+}
+
+function emitProdPromotedGateError(promotedAt) {
+  console.error(JSON.stringify({
+    success: false,
+    error: 'production_already_promoted',
+    promotedAt,
+    message: `/deploy-to-prod was run for this Vercel project at ${promotedAt}. Running /deploy-to-dev now would overwrite the production target's credentials with dev-scoped ones, causing the production URL to serve a dev build with test data to real users.`,
+    hint: [
+      'Recommended alternatives:',
+      '  - Push a feature branch to get a Vercel preview URL (preview deploys never touch the production target).',
+      '  - Set up a separate Vercel project for ongoing dev work (see DEPLOYMENT.md).',
+      '  - To force-override anyway (rare; e.g. rolling back prod to a dev build for debugging),',
+      '    re-run with --force-overwrite-prod=true. This is destructive to production users.',
+      'To clear the marker entirely after sunsetting the prod deployment:',
+      '  Doppler mode: doppler secrets unset _PROD_PROMOTED_AT --config dev',
+      '  Legacy mode:  npx vercel env rm _PROD_PROMOTED_AT production --yes',
+    ].join('\n'),
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// vercel-deploy Subcommand
+// ---------------------------------------------------------------------------
+
+async function runVercelDeploy() {
+  const result = {
+    success: false,
+    steps: [],
+  };
+
+  try {
+    const output = execSync('npx vercel deploy --prod', {
+      cwd: ROOT_DIR,
+      encoding: 'utf-8',
+      stdio: 'pipe',
+      timeout: 300000, // 5 min timeout for production build
+    });
+
+    result.success = true;
+    result.steps.push('Production deployment triggered');
+
+    // Strip ANSI escape codes from Vercel CLI output
+    const cleanOutput = output.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
+
+    // Extract deployment URL and inspect/dashboard URL from output
+    const lines = cleanOutput.split('\n').filter(l => l.trim());
+    const urlLine = lines.find(l => l.includes('https://') && !l.includes('Inspect:'));
+    if (urlLine) {
+      // Match URL and strip any trailing non-URL characters (quotes, commas, etc.)
+      const urlMatch = urlLine.match(/(https:\/\/[^\s"',]+)/);
+      if (urlMatch) {
+        result.url = urlMatch[1];
+        result.steps.push(`Deployment URL: ${result.url}`);
+      }
+    }
+
+    // Extract inspect URL and derive deployments dashboard URL
+    const inspectLine = lines.find(l => l.includes('Inspect:'));
+    if (inspectLine) {
+      const inspectMatch = inspectLine.match(/(https:\/\/vercel\.com\/[^\s"',]+)/);
+      if (inspectMatch) {
+        // Inspect URL: https://vercel.com/team/project/deploymentId
+        // Dashboard URL: https://vercel.com/team/project/deployments
+        const parts = inspectMatch[1].split('/');
+        if (parts.length >= 5) {
+          result.dashboardUrl = `${parts.slice(0, 5).join('/')}/deployments`;
+          result.steps.push(`Dashboard: ${result.dashboardUrl}`);
+        }
+      }
+    }
+
+    if (!result.url && lines.length > 0) {
+      result.steps.push(`CLI output: ${lines.slice(-3).join(' | ')}`);
+    }
+
+    // Resolve the production alias by asking Vercel directly via
+    // `vercel inspect <url> --format json`. The JSON `aliases` array lists
+    // every alias attached to the deployment, with the random-word public
+    // alias first (e.g. `news1-lime.vercel.app`) and team-scoped variants
+    // after (e.g. `news1-<team>.vercel.app`). The team-scoped variants are
+    // SSO-protected in Vercel teams, so picking the wrong one shows the user
+    // a login wall. Heuristics that build the URL from the deployment
+    // hostname pattern can't tell the difference — only inspect knows.
+    if (result.url) {
+      try {
+        const inspectOut = execSync(
+          `npx vercel inspect ${result.url} --format json`,
+          { cwd: ROOT_DIR, encoding: 'utf-8', stdio: 'pipe', timeout: 30000 }
+        );
+        // Vercel CLI prints a "Fetching deployment..." line on stderr, but
+        // with stdio: 'pipe' that's separated from stdout. stdout is pure JSON.
+        const meta = JSON.parse(inspectOut);
+        const aliases = Array.isArray(meta.aliases) ? meta.aliases : [];
+
+        // Identify team-scoped aliases by extracting the scope segment from
+        // the deployment hostname (`<project>-<9char-hash>-<scope>.vercel.app`).
+        // If the scope can be identified, drop any alias that ends in
+        // `-<scope>.vercel.app`. Otherwise fall back to "shortest alias".
+        let scope = '';
+        try {
+          const hostParts = new URL(result.url).hostname.replace('.vercel.app', '').split('-');
+          const hashIdx = hostParts.findIndex(p => /^[a-z0-9]{9}$/.test(p));
+          if (hashIdx > 0) {
+            scope = hostParts.slice(hashIdx + 1).join('-');
+          }
+        } catch {
+          // not critical
+        }
+
+        const publicAliases = scope
+          ? aliases.filter(a => !a.endsWith(`-${scope}.vercel.app`))
+          : aliases.slice();
+        const pick = (publicAliases[0] || aliases[0]);
+        if (pick) {
+          result.productionUrl = `https://${pick}`;
+          result.steps.push(`Production URL: ${result.productionUrl}`);
+        }
+      } catch (err) {
+        result.steps.push(`Warning: \`vercel inspect\` lookup failed: ${err.message || err}`);
+      }
+
+      // Fallback: scan the deploy output for the shortest .vercel.app URL.
+      if (!result.productionUrl) {
+        const allUrls = lines.join(' ').match(/https:\/\/[a-z0-9][-a-z0-9]*\.vercel\.app/g);
+        if (allUrls && allUrls.length > 1) {
+          const sorted = [...new Set(allUrls)].sort((a, b) => a.length - b.length);
+          if (sorted[0].length < result.url.length) {
+            result.productionUrl = sorted[0];
+            result.steps.push(`Production URL (fallback from deploy output): ${result.productionUrl}`);
+          }
+        }
+      }
+
+      if (!result.productionUrl) {
+        result.steps.push('Warning: Could not determine production alias URL. Run: npx vercel inspect <deployment-url> --format json to view aliases.');
+      }
+    }
+  } catch (err) {
+    const errOutput = ((err.stdout || '') + (err.stderr || '')).trim();
+    console.log(JSON.stringify({
+      success: false,
+      error: 'deploy_failed',
+      detail: errOutput.substring(0, 1000),
+      hint: 'Vercel deployment failed. Check the error above and try again.',
+    }));
+    return;
+  }
+
+  console.log(JSON.stringify(result, null, 2));
+}
+
+// ---------------------------------------------------------------------------
+// write-summary Subcommand
+// ---------------------------------------------------------------------------
+
+async function runWriteSummary(args) {
+  const vercelUrl = args['vercel-url'] || '(not yet deployed)';
+  const repoUrl = args['repo-url'] || '(not configured)';
+  const convexProdUrl = args['convex-prod-url'] || '(not configured)';
+  const convexSiteUrl = args['convex-site-url'] || '(not configured)';
+  const frontendApiUrl = args['frontend-api-url'] || '(not configured)';
+  const siteName = args['site-name'] || '(not set)';
+  const adminEmail = args['admin-email'] || '(not set)';
+  const googleOAuth = args['google-oauth'] || 'skipped';
+  // Stripe status: "configured" | "skipped" | "deferred". Defaults to "skipped"
+  // so /deploy-to-prod's default-skip Stripe path produces the right doc
+  // without forcing every caller to pass the flag explicitly.
+  const stripeStatus = args['stripe-status'] || 'skipped';
+  const webhookUrl = args['webhook-url'] || '(not configured)';
+  const dashboardUrl = args['dashboard-url'] || '';
+  const deployType = args['deploy-type'] || 'prod'; // 'dev' or 'prod'
+
+  // Build lists from comma-separated args
+  const completedSteps = (args['completed-steps'] || '').split(',').filter(Boolean);
+  const skippedSteps = (args['skipped-steps'] || '').split(',').filter(Boolean);
+  const vercelVars = (args['vercel-vars'] || '').split(',').filter(Boolean);
+  const convexVars = (args['convex-vars'] || '').split(',').filter(Boolean);
+
+  const timestamp = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
+
+  const isDev = deployType === 'dev';
+  const summaryTitle = isDev ? 'Dev Deployment Summary' : 'Production Deployment Summary';
+  const summaryFilename = isDev ? 'DEPLOYMENT-DEV.md' : 'DEPLOYMENT-PROD.md';
+
+  const lines = [
+    `# ${summaryTitle}`,
+    ``,
+    `**Deployed:** ${timestamp}`,
+    `**Site:** ${siteName}`,
+    `**Admin:** ${adminEmail}`,
+    ``,
+    `## Production URLs`,
+    ``,
+    `| Service | URL |`,
+    `|---------|-----|`,
+    `| App | ${vercelUrl} |`,
+    `| Vercel Deployments | ${dashboardUrl || '(not available)'} |`,
+    `| GitHub Repo | ${repoUrl} |`,
+    `| Convex Cloud | ${convexProdUrl} |`,
+    `| Convex HTTP Actions | ${convexSiteUrl} |`,
+    `| Clerk Frontend API | ${frontendApiUrl} |`,
+    `| Convex Dashboard | https://dashboard.convex.dev |`,
+    `| Clerk Dashboard | https://dashboard.clerk.com |`,
+    ``,
+    `## Completed Steps`,
+    ``,
+  ];
+
+  for (const step of completedSteps) {
+    lines.push(`- [x] ${step}`);
+  }
+
+  if (skippedSteps.length > 0) {
+    lines.push(``);
+    lines.push(`## Skipped / Deferred`);
+    lines.push(``);
+    for (const step of skippedSteps) {
+      lines.push(`- [ ] ${step}`);
+    }
+  }
+
+  lines.push(``);
+  lines.push(`## Environment Variables Set`);
+  lines.push(``);
+
+  if (convexVars.length > 0) {
+    lines.push(`**Convex Production:**`);
+    for (const v of convexVars) {
+      lines.push(`- \`${v}\``);
+    }
+    lines.push(``);
+  }
+
+  if (vercelVars.length > 0) {
+    lines.push(`**Vercel Production:**`);
+    for (const v of vercelVars) {
+      lines.push(`- \`${v}\``);
+    }
+    lines.push(``);
+  }
+
+  lines.push(`## Webhook`);
+  lines.push(``);
+  lines.push(`- Endpoint: \`${webhookUrl}\``);
+  lines.push(`- Events: user.created, user.updated, user.deleted, paymentAttempt.updated`);
+  lines.push(``);
+
+  lines.push(`## Ongoing Deployments`);
+  lines.push(``);
+  lines.push(`Future deployments happen automatically when you push to main:`);
+  lines.push(`\`\`\`bash`);
+  lines.push(`git push origin main`);
+  lines.push(`\`\`\``);
+  lines.push(`Vercel auto-deploys on push, including Convex function updates (via \`vercel.json\` buildCommand).`);
+  lines.push(``);
+
+  if (googleOAuth === 'deferred' || googleOAuth === 'skipped') {
+    lines.push(`## Upgrade to Production Clerk`);
+    lines.push(``);
+    lines.push(`When you have a custom domain and are ready to remove the Clerk dev badge, run:`);
+    lines.push(`\`\`\`bash`);
+    lines.push(`/deploy-to-prod`);
+    lines.push(`\`\`\``);
+    lines.push(``);
+    lines.push(`This will walk you through:`);
+    lines.push(`- Creating a Clerk production instance (requires a custom domain you own)`);
+    lines.push(`- Swapping to production Clerk keys (pk_live_/sk_live_)`);
+    lines.push(`- Setting up Google OAuth with your own credentials`);
+    lines.push(`- Configuring Stripe billing via Clerk`);
+    lines.push(``);
+  }
+
+  // When this is a PROD deploy and Stripe was skipped/deferred (the default
+  // /deploy-to-prod path), inject a dedicated "Enable Stripe Billing Later"
+  // section. /deploy-to-prod provides NO live guidance about Stripe in this
+  // case — the doc is the single source of truth for how to add it post-deploy.
+  if (!isDev && (stripeStatus === 'skipped' || stripeStatus === 'deferred')) {
+    lines.push(`## Enable Stripe Billing Later`);
+    lines.push(``);
+    lines.push(`Stripe billing was skipped during this deployment. When you're ready to`);
+    lines.push(`accept payments, complete these steps — you do NOT need to re-run`);
+    lines.push(`/deploy-to-prod:`);
+    lines.push(``);
+    lines.push(`1. **Create a Stripe account** at https://dashboard.stripe.com/register`);
+    lines.push(`   - Complete identity verification (required to leave test mode)`);
+    lines.push(``);
+    lines.push(`2. **Connect Stripe to Clerk Billing**`);
+    lines.push(`   - Open Clerk Dashboard: https://dashboard.clerk.com`);
+    lines.push(`   - Switch to your **Production** instance (top toggle)`);
+    lines.push(`   - Go to **Billing** in the left sidebar`);
+    lines.push(`   - Click **Connect Stripe** and follow the onboarding`);
+    lines.push(`   - Stripe redirects back to Clerk when done`);
+    lines.push(``);
+    lines.push(`3. **Create your first subscription plan**`);
+    lines.push(`   - Clerk Dashboard → Billing → Plans → **Create Plan**`);
+    lines.push(`   - Set a name, monthly price, and the features included`);
+    lines.push(`   - Save the plan`);
+    lines.push(``);
+    lines.push(`4. **Go live**`);
+    lines.push(`   - Toggle Clerk Billing from **Test Mode** to **Live Mode**`);
+    lines.push(`   - Confirm your Stripe account is fully activated`);
+    lines.push(``);
+    lines.push(`No code changes are required — the app already uses Clerk Billing`);
+    lines.push(`primitives; flipping the switches above enables real subscriptions.`);
+    lines.push(``);
+  }
+
+  lines.push(`## Optional Next Steps`);
+  lines.push(``);
+  lines.push(`1. **Custom Domain**: Vercel Dashboard → Settings → Domains → Add your domain`);
+
+  if (googleOAuth !== 'deferred' && googleOAuth !== 'skipped') {
+    lines.push(`2. **Enable Billing**: Clerk Dashboard (Production) → Billing → Connect Stripe`);
+    lines.push(`3. **Create Subscription Plan**: Clerk Dashboard (Production) → Billing → Plans → Create`);
+    lines.push(`4. **Go Live with Payments**: Toggle from Test Mode to Live Mode in Clerk Billing`);
+  }
+  lines.push(``);
+
+  lines.push(`## Verify Your Deployment`);
+  lines.push(``);
+  lines.push(`1. Visit your production URL: ${vercelUrl}`);
+  lines.push(`2. Create a test account`);
+  lines.push(`3. Check Convex Dashboard → Production → Data → users table`);
+  lines.push(`4. User should appear (confirms webhook is working)`);
+  lines.push(``);
+
+  const content = lines.join('\n');
+  const docsDir = path.join(ROOT_DIR, 'docs');
+  if (!fs.existsSync(docsDir)) {
+    fs.mkdirSync(docsDir, { recursive: true });
+  }
+
+  const summaryPath = path.join(docsDir, summaryFilename);
+  fs.writeFileSync(summaryPath, content, 'utf-8');
+
+  console.log(JSON.stringify({
+    success: true,
+    path: `docs/${summaryFilename}`,
+    absolutePath: summaryPath,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// update-vercel-clerk-keys Subcommand
+// ---------------------------------------------------------------------------
+
+async function runUpdateVercelClerkKeys(args) {
+  const clerkPk = args['clerk-pk'];
+  const clerkSk = args['clerk-sk'];
+  const frontendApiUrl = args['frontend-api-url'];
+
+  if (!clerkPk || !clerkSk || !frontendApiUrl) {
+    console.error(JSON.stringify({
+      success: false,
+      error: 'Missing required arguments: --clerk-pk, --clerk-sk, --frontend-api-url',
+    }));
+    process.exit(1);
+  }
+
+  const result = {
+    success: true,
+    steps: [],
+    varsSet: [],
+  };
+
+  const envVars = {
+    'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY': clerkPk,
+    'CLERK_SECRET_KEY': clerkSk,
+    'NEXT_PUBLIC_CLERK_FRONTEND_API_URL': frontendApiUrl,
+  };
+
+  for (const [key, value] of Object.entries(envVars)) {
+    try {
+      execSync(`printf '%s' "${value.replace(/"/g, '\\"')}" | npx vercel env add ${key} production --force`, {
+        cwd: ROOT_DIR,
+        stdio: 'pipe',
+        timeout: 30000,
+      });
+      result.varsSet.push(key);
+      result.steps.push(`Updated Vercel env var: ${key}`);
+    } catch (err) {
+      const errMsg = ((err.stderr || '') + (err.stdout || '')).trim();
+      result.steps.push(`Failed to update ${key}: ${errMsg.substring(0, 200)}`);
+      result.success = false;
+    }
+  }
+
+  console.log(JSON.stringify(result, null, 2));
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+const args = parseArgs(process.argv);
+const command = args._cmd;
+
+switch (command) {
+  case 'check-tools':
+    await runCheckTools();
+    break;
+  case 'gh-context':
+    await runGhContext();
+    break;
+  case 'github-setup':
+    await runGithubSetup(args);
+    break;
+  case 'convex-deploy-key':
+    await runConvexDeployKey();
+    break;
+  case 'validate-keys':
+    await runValidateKeys(args);
+    break;
+  case 'convex-deploy-functions':
+    await runConvexDeployFunctions(args);
+    break;
+  case 'prod-webhook':
+    await runProdWebhook(args);
+    break;
+  case 'convex-prod-env':
+    await runConvexProdEnv(args);
+    break;
+  case 'vercel-env-dev':
+    await runVercelEnvDev();
+    break;
+  case 'vercel-env':
+    await runVercelEnv(args);
+    break;
+  case 'vercel-env-doppler':
+    await runVercelEnvDoppler();
+    break;
+  case 'vercel-deploy':
+    await runVercelDeploy();
+    break;
+  case 'write-summary':
+    await runWriteSummary(args);
+    break;
+  case 'update-vercel-clerk-keys':
+    await runUpdateVercelClerkKeys(args);
+    break;
+  default:
+    console.error(`Usage:
+  node scripts/deploy.mjs check-tools
+  node scripts/deploy.mjs github-setup --repo-name="my-project"
+  node scripts/deploy.mjs convex-deploy-key
+  node scripts/deploy.mjs validate-keys --clerk-pk=... --clerk-sk=... [--deploy-key=prod:...|...] [--require-prod=true]
+  node scripts/deploy.mjs convex-deploy-functions --deploy-key=prod:...|...
+  node scripts/deploy.mjs prod-webhook --clerk-sk=... --convex-site-url=https://xxx.convex.site [--admin-email=admin@example.com]
+  node scripts/deploy.mjs convex-prod-env --deploy-key=prod:...|... --webhook-secret=whsec_... --frontend-api-url=https://... --admin-email=admin@example.com
+  node scripts/deploy.mjs vercel-env-dev                          (reads all from .env.local; auto-delegates to vercel-env-doppler in Doppler mode)
+  node scripts/deploy.mjs vercel-env --clerk-pk=... --clerk-sk=... --deploy-key=... --frontend-api-url=... --site-name=... [--convex-url=...]
+  node scripts/deploy.mjs vercel-env-doppler [--env=development|production] [--config=dev|prd]   (Doppler mode: pushes only DOPPLER_TOKEN; syncs Convex)
+  node scripts/deploy.mjs vercel-deploy
+  node scripts/deploy.mjs write-summary --vercel-url=... --repo-url=... [--completed-steps=...] [--skipped-steps=...]
+  node scripts/deploy.mjs update-vercel-clerk-keys --clerk-pk=pk_live_... --clerk-sk=sk_live_... --frontend-api-url=https://...`);
+    process.exit(1);
+}
