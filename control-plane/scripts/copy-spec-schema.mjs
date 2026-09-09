@@ -9,7 +9,12 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const src = path.resolve(here, '..', '..', 'spec', 'factory-spec.schema.json');
 const dest = path.resolve(here, '..', 'lib', 'factory', 'factory-spec.schema.json');
 if (!existsSync(src)) {
-  console.error(`copy-spec-schema: source not found at ${src}`);
+  // Deployed builds (Vercel uploads control-plane/ alone) use the committed copy.
+  if (existsSync(dest)) {
+    console.log(`copy-spec-schema: source absent, using committed copy at ${path.relative(process.cwd(), dest)}`);
+    process.exit(0);
+  }
+  console.error(`copy-spec-schema: source not found at ${src} and no committed copy at ${dest}`);
   process.exit(1);
 }
 mkdirSync(path.dirname(dest), { recursive: true });
