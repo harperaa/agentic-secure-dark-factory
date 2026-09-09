@@ -43,6 +43,12 @@ export const evaluate = internalMutation({
     if (open) {
       return; // waiting on the operator
     }
+    // One repair at a time: while a greptile-fix (or shepherd) run for this project is queued or
+    // running, the next verdict waits for it to finish and the reviewer to look again.
+    const recent = await ctx.db.query("runs").withIndex("by_project", (q) => q.eq("projectId", projectId)).order("desc").take(10);
+    if (recent.some((r) => (r.command === "greptile-fix" || r.command === "shepherd") && (r.state === "queued" || r.state === "running"))) {
+      return;
+    }
 
     // A CI failure is a verdict on its own; do not wait for the reviewer to confirm it.
     const waitingOnReviewer = !ciFailed && reviewerRequired && (review === undefined || review.score === null);

@@ -214,3 +214,39 @@ export const decide = internalMutation({
     return { resolved: decision.title, choice };
   },
 });
+
+/** Cancel duplicate queued runs of one command for a project (keeps running ones). */
+export const cancelQueued = internalMutation({
+  args: { name: v.string(), command: v.string() },
+  handler: async (ctx, { name, command }) => {
+    const project = await ctx.db.query("projects").withIndex("by_name", (q) => q.eq("name", name)).unique();
+    if (!project) {
+      throw new Error(`no project named ${name}`);
+    }
+    const runs = await ctx.db.query("runs").withIndex("by_project", (q) => q.eq("projectId", project._id)).order("desc").take(50);
+    const now = Date.now();
+    const cancelled: string[] = [];
+    for (const r of runs) {
+      if (r.command === command && r.state === "queued") {
+        await ctx.db.patch(r._id, { state: "cancelled", completedAt: now, error: "cancelled by the operator (duplicate)" });
+        cancelled.push(r.machinistJobId ?? r._id);
+      }
+    }
+    await ctx.db.insert("events", { projectId: project._id, at: now, actor: "cli:operator", action: "run.cancel-queued", after: { command, cancelled } });
+    return { cancelled };
+  },
+});
+
+/** Mark a run cancelled by its Machinist job id (after the job was deleted from Machinist). */
+export const cancelByJob = internalMutation({
+  args: { machinistJobId: v.string() },
+  handler: async (ctx, { machinistJobId }) => {
+    const run = await ctx.db.query("runs").withIndex("by_machinist_job", (q) => q.eq("machinistJobId", machinistJobId)).unique();
+    if (!run || (run.state !== "queued" && run.state !== "running")) {
+      return { cancelled: false };
+    }
+    await ctx.db.patch(run._id, { state: "cancelled", completedAt: Date.now(), error: "cancelled by the operator (duplicate)" });
+    await ctx.db.insert("events", { projectId: run.projectId, runId: run._id, at: Date.now(), actor: "cli:operator", action: "run.cancel", after: { machinistJobId } });
+    return { cancelled: true };
+  },
+});
