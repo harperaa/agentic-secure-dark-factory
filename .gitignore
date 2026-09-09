@@ -25,3 +25,4 @@ security_context/archive_*/
 .DS_Store
 .idea/
 .vscode/
+factory/bridge/node_modules/

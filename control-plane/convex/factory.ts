@@ -102,11 +102,8 @@ export const gateUpdate = internalMutation({
         .withIndex("by_project", (q) => q.eq("projectId", project._id))
         .order("desc")
         .first();
-      if (!latestRun) {
-        return null;
-      }
       gateId = await ctx.db.insert("gates", {
-        runId: latestRun._id,
+        ...(latestRun ? { runId: latestRun._id } : {}),
         projectId: project._id,
         pr: args.pr,
         verdict: "pending",

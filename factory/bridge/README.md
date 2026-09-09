@@ -13,6 +13,7 @@ Loop, every `BRIDGE_POLL_MS`:
 Run it from the factory checkout with the operator environment loaded:
 
 ```bash
+(cd factory/bridge && npm ci --no-audit --no-fund)   # once
 set -a; source ~/.config/asdf/factory.env; set +a
 node factory/bridge/bridge.mjs
 ```

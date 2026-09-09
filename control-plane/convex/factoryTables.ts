@@ -115,7 +115,7 @@ export const factoryTables = {
 
   /** Gate results per run (design §4.3, §4.7, §4.8). */
   gates: defineTable({
-    runId: v.id("runs"),
+    runId: v.optional(v.id("runs")), // absent for adopted projects whose PR predates the control plane
     projectId: v.id("projects"),
     pr: v.optional(v.number()),
     headSha: v.optional(v.string()),

@@ -261,10 +261,7 @@ export const gateSync = mutation({
       }
     } else {
       const latestRun = await ctx.db.query("runs").withIndex("by_project", (q) => q.eq("projectId", projectId)).order("desc").first();
-      if (!latestRun) {
-        return;
-      }
-      await ctx.db.insert("gates", { runId: latestRun._id, projectId, pr, verdict: "pending", ...patch });
+      await ctx.db.insert("gates", { ...(latestRun ? { runId: latestRun._id } : {}), projectId, pr, verdict: "pending", ...patch });
       await ctx.scheduler.runAfter(0, internal.gates.evaluate, { projectId });
     }
     // Record the changed paths and labels for the forced-gray classifier.
