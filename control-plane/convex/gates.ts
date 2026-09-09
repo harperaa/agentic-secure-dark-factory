@@ -37,8 +37,9 @@ export const evaluate = internalMutation({
       return; // waiting on the operator
     }
 
+    // A CI failure is a verdict on its own; do not wait for the reviewer to confirm it.
+    const waitingOnReviewer = !ciFailed && reviewerRequired && (review === undefined || review.score === null);
     // Pending: no CI verdict yet, or reviewer has not spoken.
-    const waitingOnReviewer = reviewerRequired && (review === undefined || review.score === null);
     if ((!ciPassed && !ciFailed) || waitingOnReviewer) {
       const waited = now - (gate?.updatedAt ?? project.updatedAt);
       if (waited > 20 * 60_000) {
