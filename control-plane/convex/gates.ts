@@ -27,7 +27,11 @@ export const evaluate = internalMutation({
     const ciPassed = ciConclusions.length > 0 && ciConclusions.every((c) => c === "success" || c === "neutral" || c === "skipped");
     const review = gate?.review;
     const forcedGray = gate?.forcedGray ?? { forced: false, reasons: [] };
-    const forced = forcedGray.forced;
+    // No AI reviewer means no independent review: never auto-merge, whatever the mode.
+    const forced = forcedGray.forced || !reviewerRequired;
+    if (!reviewerRequired && !forcedGray.reasons.includes("no reviewer configured")) {
+      forcedGray.reasons = [...forcedGray.reasons, "no reviewer configured"];
+    }
 
     const open = await ctx.db
       .query("decisions")
