@@ -67,7 +67,7 @@ GENESIS lockdown started
 PROTECT required-checks passed
 GENESIS lockdown passed"
 assert_eq "$(genesis_steps "$out" | grep -v '^GENERATED' ; true)" "$(printf '%s\n' "$expected_fresh" | grep -v '^GENERATED')" "fresh run emits the golden step sequence"
-assert_eq "$(genesis_steps "$out" | grep -c '^GENERATED .* passed')" 5 "five factory-owned files are written"
+assert_eq "$(genesis_steps "$out" | grep -c '^GENERATED .* passed')" 6 "six factory-owned files are written"
 assert_contains "$out" "RESULT status=ready repo=fixture-owner/g1 repo_url=https://github.com/fixture-owner/g1 url=https://fake-product.vercel.app sandbox=local" "RESULT line is unchanged"
 assert_contains "$out" '"claimUrl": "https://dashboard.clerk.com/apps/claim?token=fake"' "init output with the claim URL is in the run record"
 prod="$FACTORY_WORKSPACE/g1"
