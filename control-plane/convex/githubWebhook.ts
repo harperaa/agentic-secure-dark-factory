@@ -36,7 +36,7 @@ type GitHubEvent = {
   action?: string;
   repository?: { full_name: string };
   issue?: { number: number; html_url: string; pull_request?: unknown };
-  pull_request?: { number: number; html_url: string; head?: { sha: string } };
+  pull_request?: { number: number; html_url: string; merged?: boolean; head?: { sha: string } };
   review?: { user?: { login: string }; body?: string };
   check_suite?: { conclusion?: string | null; head_sha?: string; pull_requests?: Array<{ number: number }> };
 };
@@ -49,9 +49,8 @@ function parseScore(body: string | undefined): number | null {
 export const githubWebhook = httpAction(async (ctx, request) => {
   const secret = process.env.GITHUB_WEBHOOK_SECRET;
   const reviewerBot = process.env.GREPTILE_BOT_LOGIN;
-  const requestLabel = process.env.MACHINIST_REQUEST_LABEL;
-  if (!secret || !reviewerBot || !requestLabel) {
-    return new Response("MISSING_ENV GITHUB_WEBHOOK_SECRET|GREPTILE_BOT_LOGIN|MACHINIST_REQUEST_LABEL", { status: 500 });
+  if (!secret || !reviewerBot) {
+    return new Response("MISSING_ENV GITHUB_WEBHOOK_SECRET|GREPTILE_BOT_LOGIN", { status: 500 });
   }
   const body = await request.text();
   if (!(await verifySignature(secret, body, request.headers.get("x-hub-signature-256")))) {
@@ -66,26 +65,18 @@ export const githubWebhook = httpAction(async (ctx, request) => {
   const actor = "webhook:github";
 
   if (eventName === "issues" && evt.action === "opened" && evt.issue && !evt.issue.pull_request) {
-    await ctx.runMutation(internal.factory.enqueue, {
-      projectRepo: repo,
-      stage: "TRIAGE",
-      command: "triage",
-      prompt: `--ref=${evt.issue.html_url} --request-label=${requestLabel}`,
-      ref: evt.issue.html_url,
-      actor,
-    });
+    await ctx.runMutation(internal.stateMachine.onIssueOpened, { repo, url: evt.issue.html_url });
     return new Response("queued", { status: 202 });
   }
 
+  if (eventName === "pull_request" && evt.action === "closed" && evt.pull_request?.merged) {
+    await ctx.runMutation(internal.stateMachine.onPullRequestMerged, { repo, pr: evt.pull_request.number });
+    return new Response("merged", { status: 202 });
+  }
+
   if (eventName === "pull_request" && evt.action === "opened" && evt.pull_request) {
-    await ctx.runMutation(internal.factory.enqueue, {
-      projectRepo: repo,
-      stage: "TRIAGE",
-      command: "triage",
-      prompt: `--ref=${evt.pull_request.html_url} --request-label=${requestLabel}`,
-      ref: evt.pull_request.html_url,
-      actor,
-    });
+    // Human-opened PRs in maintenance are triaged like issues; foreman PRs are tracked via runs.
+    await ctx.runMutation(internal.stateMachine.onIssueOpened, { repo, url: evt.pull_request.html_url });
     return new Response("queued", { status: 202 });
   }
 
@@ -97,6 +88,7 @@ export const githubWebhook = httpAction(async (ctx, request) => {
       reviewScore: parseScore(evt.review.body),
       actor,
     });
+    await ctx.runMutation(internal.gates.evaluateForRepo, { repo });
     return new Response("gate updated", { status: 202 });
   }
 
@@ -110,6 +102,7 @@ export const githubWebhook = httpAction(async (ctx, request) => {
         actor,
       });
     }
+    await ctx.runMutation(internal.gates.evaluateForRepo, { repo });
     return new Response("gate updated", { status: 202 });
   }
 

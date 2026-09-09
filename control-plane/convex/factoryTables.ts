@@ -67,6 +67,10 @@ export const factoryTables = {
       }),
     ),
     lastAssessmentAt: v.optional(v.number()),
+    phaseIssues: v.optional(v.array(v.string())), // issue URLs, index = phase
+    currentPr: v.optional(v.number()),
+    repairRound: v.optional(v.number()),
+    retryCount: v.optional(v.number()),
     createdBy: v.string(), // Clerk user id
     updatedAt: v.number(),
   })
@@ -190,4 +194,27 @@ export const factoryTables = {
   })
     .index("by_project_status", ["projectId", "status"])
     .index("by_status", ["status", "createdAt"]),
+
+  /**
+   * Side effects the control plane asks the bridge to perform with the worker machine's own
+   * credentials (design §4.9, §5.0): the control plane never holds gh or provider tokens.
+   */
+  effects: defineTable({
+    projectId: v.id("projects"),
+    kind: v.union(
+      v.literal("apply-label"),
+      v.literal("remove-label"),
+      v.literal("comment"),
+      v.literal("create-phase-issues"),
+      v.literal("register-repository"),
+    ),
+    args: v.any(),
+    status: v.union(v.literal("queued"), v.literal("running"), v.literal("done"), v.literal("failed")),
+    result: v.optional(v.any()),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    completedAt: v.optional(v.number()),
+  })
+    .index("by_status", ["status", "createdAt"])
+    .index("by_project", ["projectId", "createdAt"]),
 };
