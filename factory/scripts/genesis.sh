@@ -44,10 +44,18 @@ if [ -d "$target/.git" ]; then
   log $STAGE clone skipped path="$target"
 else
   log $STAGE clone started
-  git clone --depth 1 --branch "$SVCOS_TEMPLATE_REF" "$SVCOS_TEMPLATE_URL" "$target"
+  # A full clone: the product keeps the template history so SVCOS's upstream-merge commands
+  # work, and a shallow root commit cannot be pushed (its parents were never fetched).
+  git clone --branch "$SVCOS_TEMPLATE_REF" "$SVCOS_TEMPLATE_URL" "$target"
   log $STAGE clone passed
 fi
 cd "$target" || die "cannot enter $target"
+if [ -f .git/shallow ]; then
+  log $STAGE unshallow started
+  template_remote=$(git remote -v | awk -v u="$SVCOS_TEMPLATE_URL" '$2==u {print $1; exit}')
+  git fetch --unshallow "${template_remote:-origin}"
+  log $STAGE unshallow passed
+fi
 
 # --- 2. Dependencies ----------------------------------------------------------------------
 if [ -d node_modules ] && [ package-lock.json -ot node_modules ]; then
@@ -62,7 +70,12 @@ fi
 if [ -f .doppler.yaml ]; then
   log $STAGE doppler-bootstrap skipped
 else
-  require_env DOPPLER_TOKEN
+  # Local runtime: the worker account's Doppler CLI login is the credential (design §8.1).
+  # Cloud sandboxes inject DOPPLER_TOKEN per run instead.
+  if [ -z "${DOPPLER_TOKEN:-}" ] && ! doppler me >/dev/null 2>&1; then
+    printf 'MISSING_ENV DOPPLER_TOKEN (or a Doppler CLI login for this account)\n' >&2
+    exit 2
+  fi
   log $STAGE doppler-bootstrap started
   node scripts/setup.mjs doppler-bootstrap --project-name="$name"
   log $STAGE doppler-bootstrap passed
@@ -70,7 +83,8 @@ fi
 
 # --- 4. Init (Clerk keys, app secrets, env) -----------------------------------------------
 claim_url=""
-if grep -qs '^NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=' .env.local 2>/dev/null; then
+if has_setting NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY; then
+  claim_url=$(get_setting FACTORY_CLERK_CLAIM_URL)
   log $STAGE init skipped
 else
   log $STAGE init started
@@ -83,7 +97,13 @@ else
   fi
   init_out=$(node scripts/setup.mjs "${init_args[@]}")
   init_json=$(last_json_line "$init_out")
+  assert_success "$init_json" init
   claim_url=$(json_field "$init_json" claimUrl)
+  # The claim URL is returned exactly once; keep it in the secrets broker so a re-run and the
+  # hand-off can still surface it (design R9).
+  if [ -n "$claim_url" ] && [ -f .doppler.yaml ]; then
+    doppler secrets set FACTORY_CLERK_CLAIM_URL="$claim_url" --config dev --silent >/dev/null
+  fi
   log $STAGE init passed accountless="$(json_field "$init_json" accountless)"
 fi
 
@@ -98,23 +118,36 @@ else
 fi
 
 # --- 6. Convex project --------------------------------------------------------------------
-if grep -qs '^NEXT_PUBLIC_CONVEX_URL=' .env.local 2>/dev/null; then
+if has_setting NEXT_PUBLIC_CONVEX_URL; then
   log $STAGE convex-setup skipped
 else
   log $STAGE convex-setup started
   convex_args=(convex-setup "--project-name=$name")
   [ -n "${CONVEX_TEAM:-}" ] && convex_args+=("--team=$CONVEX_TEAM")
-  node scripts/setup.mjs "${convex_args[@]}"
+  convex_out=$(node scripts/setup.mjs "${convex_args[@]}")
+  printf '%s\n' "$convex_out"
+  assert_success "$(last_json_line "$convex_out")" convex-setup
   log $STAGE convex-setup passed
 fi
 
 # --- 7. Configure webhook + Convex env, install summary -----------------------------------
 log $STAGE configure started
-node scripts/setup.mjs configure --admin-email="$email"
+configure_out=$(node scripts/setup.mjs configure --admin-email="$email")
+printf '%s\n' "$configure_out"
+assert_success "$(last_json_line "$configure_out")" configure
 node scripts/setup.mjs write-install-summary \
   --modules-installed="${modules// /,}" \
   ${claim_url:+--claim-url="$claim_url" --accountless=true}
 log $STAGE configure passed
+
+# --- 7b. Doppler post-init: Convex writes its outputs to .env.local; push them to Doppler dev
+if [ -f .doppler.yaml ]; then
+  log $STAGE doppler-sync started
+  sync_out=$(node scripts/setup.mjs doppler-sync-env-local)
+  printf '%s\n' "$sync_out"
+  assert_success "$(last_json_line "$sync_out")" doppler-sync
+  log $STAGE doppler-sync passed
+fi
 
 # --- 8. Factory-owned files (AGENTS.md, security workflow, baselines) ---------------------
 log $STAGE generated-files started
@@ -130,10 +163,29 @@ else
   git add -A
   git diff --cached --quiet || git -c user.name="${GIT_AUTHOR_NAME:-factory}" -c user.email="${GIT_AUTHOR_EMAIL:-$email}" \
     commit -q -m "chore: factory genesis for $name"
-  node scripts/deploy.mjs github-setup --repo-name="$name" --owner="$owner"
+  gh_out=$(node scripts/deploy.mjs github-setup --repo-name="$name" --owner="$owner")
+  printf '%s\n' "$gh_out"
+  assert_success "$(last_json_line "$gh_out")" github-setup
   log $STAGE github-setup passed
 fi
 repo_url=$(gh repo view "$owner/$name" --json url -q .url)
+# With origin and upstream both present, gh would otherwise resolve upstream (the template) as
+# the default repository for every later gh call in this checkout, including lockdown-main.sh.
+gh repo set-default "$owner/$name"
+
+# --- 9b. Doppler CI token pushed to GitHub Actions (needs the repo to exist) ---------------
+if [ -f .doppler.yaml ]; then
+  if gh secret list --repo "$owner/$name" --json name -q '.[].name' 2>/dev/null | grep -qx DOPPLER_TOKEN; then
+    log $STAGE doppler-ci-token skipped
+  else
+    log $STAGE doppler-ci-token started
+    # The product has origin and upstream remotes; tell gh which repo without patching SVCOS.
+    ci_out=$(GH_REPO="$owner/$name" node scripts/setup.mjs doppler-create-ci-token)
+    printf '%s\n' "$ci_out"
+    assert_success "$(last_json_line "$ci_out")" doppler-ci-token
+    log $STAGE doppler-ci-token passed
+  fi
+fi
 
 # --- 10. Vercel link and git connect ------------------------------------------------------
 if [ -f .vercel/project.json ]; then
@@ -146,6 +198,18 @@ else
     log $STAGE vercel-git-connect failed reason=non-fatal
   log $STAGE vercel-link passed
 fi
+
+# --- 10b. vercel.json for the active mode (mirrors /deploy-to-dev step 3) ------------------
+# The template's own vercel.json re-installs modules at build time so the demo site renders;
+# a product has its modules committed, so that command must go or the Vercel build fails.
+log $STAGE vercel-config started
+if [ -f .doppler.yaml ]; then
+  jq -n '{"$schema":"https://openapi.vercel.sh/vercel.json", framework:"nextjs", buildCommand:"node scripts/vercel-prebuild.mjs && npm run build"}' > vercel.json
+else
+  jq -n '{framework:"nextjs"}' > vercel.json
+fi
+grep -q 'modules.mjs install' vercel.json && die "vercel.json still re-installs modules"
+log $STAGE vercel-config passed mode="$([ -f .doppler.yaml ] && echo doppler || echo env)"
 
 # --- 11. Push everything the steps above changed ------------------------------------------
 log $STAGE push started
@@ -167,7 +231,7 @@ log $STAGE deploy-dev passed
 # --- 13. Branch protection ----------------------------------------------------------------
 log $STAGE lockdown started mode="$mode"
 lockdown_mode=$([ "$mode" = "dark" ] && printf '%s' "$LOCKDOWN_MODE_DARK" || printf '%s' "$LOCKDOWN_MODE_GRAY")
-if [ "$lockdown_mode" = "solo" ]; then ./scripts/lockdown-main.sh --solo; else ./scripts/lockdown-main.sh; fi
+if [ "$lockdown_mode" = "solo" ]; then GH_REPO="$owner/$name" ./scripts/lockdown-main.sh --solo; else GH_REPO="$owner/$name" ./scripts/lockdown-main.sh; fi
 "$SCRIPT_DIR/protect-main.sh" "$owner/$name" "$FACTORY_REQUIRED_CONTEXTS"
 log $STAGE lockdown passed
 

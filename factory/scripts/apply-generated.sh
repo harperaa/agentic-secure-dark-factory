@@ -11,14 +11,21 @@ target="${1:-}"
 [ -d "$target" ] || die "usage: apply-generated.sh </path/to/product-repo>"
 src="$SCRIPT_DIR/../generated"
 marker="factory-managed"
+# Files the product owns after the first write: the factory seeds them and never overwrites.
+write_once='.secrets.baseline security_context/accepted.json'
 
 while IFS= read -r -d '' file; do
   rel="${file#"$src"/}"
   dest="$target/$rel"
   mkdir -p "$(dirname "$dest")"
-  if [ -e "$dest" ] && ! grep -qs "$marker" "$dest"; then
-    log GENERATED "$rel" skipped reason=exists-unmanaged
-    continue
+  if [ -e "$dest" ]; then
+    case " $write_once " in
+      *" $rel "*) log GENERATED "$rel" skipped reason=write-once; continue ;;
+    esac
+    if ! grep -qs "$marker" "$dest"; then
+      log GENERATED "$rel" skipped reason=exists-unmanaged
+      continue
+    fi
   fi
   cp "$file" "$dest"
   log GENERATED "$rel" passed

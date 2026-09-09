@@ -71,7 +71,48 @@ json_field() {
   jq -r --arg k "$2" '.[$k] // empty' <<<"$1"
 }
 
-# last_json_line TEXT — SVCOS scripts print progress then a JSON object; return the last JSON line.
+# last_json_line TEXT — SVCOS scripts print progress then a (pretty-printed) JSON object;
+# return that final object compacted to one line, or nothing if none parses.
 last_json_line() {
-  printf '%s\n' "$1" | grep -E '^\s*\{' | tail -n 1
+  local text="$1" start
+  start=$(printf '%s\n' "$text" | grep -nE '^\{' | tail -n 1 | cut -d: -f1)
+  [ -n "$start" ] || return 0
+  printf '%s\n' "$text" | tail -n +"$start" | jq -c . 2>/dev/null || true
+}
+
+# get_setting KEY — print a non-secret setting's value from Doppler dev or .env.local.
+get_setting() {
+  local key="$1"
+  if [ -f .doppler.yaml ]; then
+    doppler secrets get "$key" --plain 2>/dev/null || true
+  else
+    grep -s "^$key=" .env.local | cut -d= -f2- || true
+  fi
+}
+
+# assert_success JSON STEP — SVCOS scripts exit 0 even when they report {"success": false};
+# fail the stage with the script's own error text instead of carrying on.
+assert_success() {
+  local json="$1" step="$2"
+  if [ -z "$json" ]; then
+    printf 'ERROR step=%s reason=no-json-result\n' "$step" >&2
+    exit 1
+  fi
+  # jq's // treats false as missing, so test equality explicitly.
+  if [ "$(jq -r 'if .success == false then "false" else "true" end' <<<"$json")" = "false" ]; then
+    printf 'ERROR step=%s reason=%s detail=%s\n' "$step" \
+      "$(jq -r '.error // "unknown"' <<<"$json")" "$(jq -r '.detail // .hint // "" | tostring' <<<"$json" | tr '\n' ' ' | cut -c1-300)" >&2
+    exit 1
+  fi
+}
+
+# has_setting KEY — true when the product already has KEY configured: in the Doppler dev
+# config when the repo is in Doppler mode (.doppler.yaml), otherwise in .env.local.
+has_setting() {
+  local key="$1"
+  if [ -f .doppler.yaml ]; then
+    [ -n "$(doppler secrets get "$key" --plain 2>/dev/null || true)" ]
+  else
+    grep -qs "^$key=" .env.local
+  fi
 }

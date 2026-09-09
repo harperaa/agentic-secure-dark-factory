@@ -19,24 +19,27 @@ email=$(spec_get "$IN" admin_email)
 [ -f .vercel/project.json ] || die "NEEDS_HUMAN reason=vercel-not-linked (run genesis or `vercel link` first)"
 
 log $STAGE check-tools started
-node scripts/deploy.mjs check-tools >/dev/null
+assert_success "$(last_json_line "$(node scripts/deploy.mjs check-tools)")" check-tools
 log $STAGE check-tools passed
 
 log $STAGE vercel-env started
-node scripts/deploy.mjs vercel-env-dev >/dev/null
+env_out=$(node scripts/deploy.mjs vercel-env-dev)
+printf '%s\n' "$env_out"
+assert_success "$(last_json_line "$env_out")" vercel-env-dev
 log $STAGE vercel-env passed
 
 log $STAGE vercel-deploy started
 deploy_json=$(last_json_line "$(node scripts/deploy.mjs vercel-deploy)")
+assert_success "$deploy_json" vercel-deploy
 url=$(json_field "$deploy_json" url)
 dashboard=$(json_field "$deploy_json" dashboardUrl)
 [ -n "$url" ] || die "vercel-deploy returned no url: $deploy_json"
 log $STAGE vercel-deploy passed url="$url"
 
 repo_url=$(gh repo view "$owner/$name" --json url -q .url)
-convex_url=$(grep -s '^NEXT_PUBLIC_CONVEX_URL=' .env.local | cut -d= -f2- || true)
+convex_url=$(get_setting NEXT_PUBLIC_CONVEX_URL)
 convex_site_url=${convex_url/.convex.cloud/.convex.site}
-frontend_api=$(grep -s '^NEXT_PUBLIC_CLERK_FRONTEND_API_URL=' .env.local | cut -d= -f2- || true)
+frontend_api=$(get_setting NEXT_PUBLIC_CLERK_FRONTEND_API_URL)
 
 log $STAGE write-summary started
 node scripts/deploy.mjs write-summary --deploy-type="dev" \

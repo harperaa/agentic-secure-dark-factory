@@ -1,0 +1,14 @@
+# factory-managed: written by Agentic Secure Dark Factory (factory/generated). Edit upstream, not here.
+# The per-PR Semgrep gate covers the shipped application. Template tooling and teaching content
+# are scanned by the periodic full assessment instead (design §4.8).
+node_modules/
+.next/
+scripts/
+.claude/
+.cursor/
+docs/
+templates/
+security_context/
+security_reports/
+threat_modeling_output/
+public/
