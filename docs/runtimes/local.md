@@ -57,6 +57,35 @@ factory/scripts/submit-job.sh --command=genesis --repository=factory-workspace \
 `genesis.sh` reads the spec from stdin, is idempotent, prints one `GENESIS step=… outcome=…`
 line per step, and ends with `RESULT status=ready repo=… url=…`.
 
+## Operator CLI
+
+`factory/scripts/sdf.sh` drives the control plane from this machine with the Convex admin session:
+
+```bash
+factory/scripts/sdf.sh create <spec.json> --start   # create a project and start the line
+factory/scripts/sdf.sh status <name>                # stage, recent runs, open decisions
+factory/scripts/sdf.sh retry <name>                 # re-run the last failed stage after fixing the cause
+factory/scripts/sdf.sh set-pr <name> <number>       # correct the tracked pull request
+```
+
+The bridge (`node factory/bridge/bridge.mjs`) must be running for queued runs to reach Machinist.
+After genesis registers a new product repository, restart the worker so it advertises it; the
+bridge logs `restart the worker to advertise the new repository` on that effect.
+
+## Memory and Docker
+
+The local runtime is memory-hungry when several things overlap: a foreman run spawns Claude
+subagents, `npx convex dev` and `next build` are heavy, and Docker Desktop with the 3 GB
+`svcos-factory` image adds more. On a laptop, keep Docker Desktop closed unless you are using the
+Docker sandbox backend; the local runtime does not need it. If the host kills the worker
+mid-run, Machinist's lease expires and the job is re-leased; the foreman resumes from its state
+comment. If the bridge is killed, restart it; it re-tracks running runs on start.
+
+## Tools worth installing
+
+- `detect-secrets` (`python3 -m venv ~/.local/share/asdf-tools && ~/.local/share/asdf-tools/bin/pip install detect-secrets==1.5.0`, then symlink the two binaries into `~/.local/bin`): genesis seeds each product's secrets baseline from a real scan when it is on PATH; otherwise the product's first PR fails its `secrets` check on template example strings.
+- The Vercel CLI installed globally (`npm install -g vercel@<pinned>`): products carry an `.npmrc` that blocks `npx` install scripts, so an on-demand install fails inside a product checkout.
+
 ## Housekeeping
 
 - Prune worktrees for merged or closed PRs on a schedule: `git worktree prune` in each product checkout.
