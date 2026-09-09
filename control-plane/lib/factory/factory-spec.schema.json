@@ -1,0 +1,340 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harperaa/agentic-secure-dark-factory/spec/factory-spec.schema.json",
+  "title": "factory-spec",
+  "description": "Input to the Agentic Secure Dark Factory: one product, from genesis through maintenance. Version 0.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "pitch",
+    "admin_email",
+    "github_owner",
+    "secrets_mode",
+    "phases",
+    "mode",
+    "greptile_threshold",
+    "max_repair_rounds",
+    "forced_gray_paths",
+    "providers"
+  ],
+  "properties": {
+    "spec_version": {
+      "type": "integer",
+      "const": 0,
+      "default": 0
+    },
+    "name": {
+      "type": "string",
+      "description": "Slug used for the GitHub repository, Doppler project, Convex project, and Vercel project.",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "minLength": 2,
+      "maxLength": 40
+    },
+    "pitch": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "admin_email": {
+      "type": "string",
+      "format": "email",
+      "description": "Admin user for the product; must be a real mailbox (SVCOS rejects placeholder domains)."
+    },
+    "github_owner": {
+      "type": "string",
+      "description": "GitHub user or organization the product repository is created under.",
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$"
+    },
+    "modules": {
+      "type": "array",
+      "description": "SVCOS optional content modules to install (names from `node scripts/modules.mjs list`).",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9-]+$"
+      },
+      "uniqueItems": true,
+      "default": []
+    },
+    "secrets_mode": {
+      "type": "string",
+      "enum": [
+        "doppler",
+        "env"
+      ],
+      "description": "doppler = SVCOS Doppler mode (.doppler.yaml); env = legacy .env.local mode, used by non-Doppler secrets adapters."
+    },
+    "clerk": {
+      "type": "object",
+      "description": "Optional pre-provisioned Clerk dev keys. Omitted = accountless application created at genesis.",
+      "additionalProperties": false,
+      "properties": {
+        "publishable_key": {
+          "type": "string",
+          "pattern": "^pk_(test|live)_"
+        },
+        "secret_key_ref": {
+          "type": "string",
+          "description": "Reference into the secrets adapter (never the key itself), e.g. doppler://factory/dev/CLERK_SECRET_KEY_ACME."
+        }
+      },
+      "required": [
+        "publishable_key",
+        "secret_key_ref"
+      ]
+    },
+    "phases": {
+      "type": "array",
+      "description": "Ordered build phases. Each becomes one GitHub issue and one BUILD stage run by the unmodified foreman.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "acceptance"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 120
+          },
+          "description": {
+            "type": "string"
+          },
+          "acceptance": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 3
+            }
+          },
+          "touches": {
+            "type": "array",
+            "description": "Paths the phase is expected to change; used by triage to pre-classify risk.",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "dark",
+        "gray"
+      ],
+      "description": "dark = control plane applies machinist:auto-merge once gates pass; gray = only a human applies it."
+    },
+    "greptile_threshold": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 5,
+      "description": "Minimum Greptile confidence score for the review gate to pass."
+    },
+    "max_repair_rounds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 20,
+      "description": "Greptile repair rounds before the stage stops as NEEDS_HUMAN."
+    },
+    "forced_gray_paths": {
+      "type": "array",
+      "description": "Glob patterns; a PR touching any of them is staged for a human regardless of mode.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "deepsec": {
+          "type": "string",
+          "enum": [
+            "on",
+            "off",
+            "auto"
+          ],
+          "default": "auto"
+        },
+        "max_new_medium": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "baseline_path": {
+          "type": "string",
+          "default": "security_context/accepted.json"
+        }
+      }
+    },
+    "release_policy": {
+      "type": "object",
+      "description": "What counts as a major release, which re-runs the full security assessment.",
+      "additionalProperties": false,
+      "properties": {
+        "major_tag_pattern": {
+          "type": "string",
+          "default": "^v[0-9]+\\.0\\.0$"
+        },
+        "label": {
+          "type": "string",
+          "default": "release:major"
+        },
+        "manual": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "providers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile",
+        "sandbox"
+      ],
+      "properties": {
+        "profile": {
+          "type": "string",
+          "enum": [
+            "default",
+            "eu"
+          ]
+        },
+        "hosting": {
+          "type": "string",
+          "enum": [
+            "vercel",
+            "scaleway",
+            "hetzner-coolify"
+          ]
+        },
+        "identity": {
+          "type": "string",
+          "enum": [
+            "clerk",
+            "keycloak",
+            "zitadel"
+          ]
+        },
+        "secrets": {
+          "type": "string",
+          "enum": [
+            "doppler",
+            "infisical"
+          ]
+        },
+        "backend": {
+          "type": "string",
+          "enum": [
+            "convex-cloud",
+            "convex-selfhosted"
+          ]
+        },
+        "payments": {
+          "type": "string",
+          "enum": [
+            "clerk-billing",
+            "mollie",
+            "payone",
+            "none"
+          ]
+        },
+        "sandbox": {
+          "type": "string",
+          "enum": [
+            "local",
+            "daytona",
+            "cloudflare",
+            "scaleway"
+          ]
+        },
+        "llm": {
+          "type": "string",
+          "enum": [
+            "anthropic",
+            "openai",
+            "anthropic-bedrock-eu",
+            "anthropic-vertex-eu",
+            "mistral"
+          ]
+        },
+        "review": {
+          "type": "string",
+          "enum": [
+            "greptile",
+            "self-hosted"
+          ]
+        },
+        "scm": {
+          "type": "string",
+          "enum": [
+            "github"
+          ]
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "secrets_mode": {
+            "const": "doppler"
+          }
+        },
+        "required": [
+          "secrets_mode"
+        ]
+      },
+      "then": {
+        "properties": {
+          "providers": {
+            "type": "object",
+            "properties": {
+              "secrets": {
+                "enum": [
+                  "doppler"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "providers": {
+            "type": "object",
+            "properties": {
+              "secrets": {
+                "const": "infisical"
+              }
+            },
+            "required": [
+              "secrets"
+            ]
+          }
+        },
+        "required": [
+          "providers"
+        ]
+      },
+      "then": {
+        "properties": {
+          "secrets_mode": {
+            "const": "env"
+          }
+        }
+      }
+    }
+  ]
+}

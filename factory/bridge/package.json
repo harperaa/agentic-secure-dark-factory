@@ -1,0 +1,10 @@
+{
+  "name": "asdf-bridge",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Bridge between the factory's Convex control plane and the local Machinist control plane",
+  "type": "module",
+  "scripts": { "start": "node bridge.mjs" },
+  "dependencies": { "convex": "^1.43.0" },
+  "engines": { "node": ">=24.15.0 <26" }
+}

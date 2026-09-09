@@ -1,0 +1,13 @@
+# Per-PR Semgrep gate for the factory repository. The control plane is an SVCOS install, so the
+# template's tooling, teaching content, and docs are excluded here exactly as the generated
+# .semgrepignore does for products (design §4.8); the periodic assessment scans everything.
+node_modules/
+.next/
+/control-plane/scripts/
+/control-plane/.claude/
+/control-plane/.cursor/
+/control-plane/docs/
+/control-plane/templates/
+/control-plane/public/
+/control-plane/.next/
+/.claude/worktrees/
