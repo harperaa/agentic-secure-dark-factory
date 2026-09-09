@@ -229,7 +229,7 @@ export const gateSync = mutation({
     projectId: v.id("projects"),
     pr: v.number(),
     headSha: v.optional(v.string()),
-    ci: v.array(v.object({ name: v.string(), conclusion: v.string() })),
+    ci: v.array(v.object({ name: v.string(), conclusion: v.string(), required: v.optional(v.boolean()) })),
     reviewScore: v.union(v.number(), v.null()),
     unresolvedComments: v.number(),
     changedPaths: v.array(v.string()),

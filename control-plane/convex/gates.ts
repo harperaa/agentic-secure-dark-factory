@@ -22,7 +22,10 @@ export const evaluate = internalMutation({
       .first();
     const now = Date.now();
     const reviewerRequired = (project.providers.review ?? "greptile") !== "none";
-    const ciConclusions = gate?.ci?.map((c) => c.conclusion) ?? [];
+    // Only required status checks decide the gate; SVCOS's optional review workflows may fail freely.
+    const allCi = gate?.ci ?? [];
+    const requiredCi = allCi.filter((c) => c.required === true);
+    const ciConclusions = (requiredCi.length > 0 ? requiredCi : allCi).map((c) => c.conclusion);
     const ciFailed = ciConclusions.some((c) => c === "failure" || c === "timed_out" || c === "cancelled");
     const ciPassed = ciConclusions.length > 0 && ciConclusions.every((c) => c === "success" || c === "neutral" || c === "skipped");
     const review = gate?.review;

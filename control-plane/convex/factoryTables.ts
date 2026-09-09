@@ -124,6 +124,7 @@ export const factoryTables = {
         v.object({
           name: v.string(),
           conclusion: v.string(), // success | failure | neutral | pending | ...
+          required: v.optional(v.boolean()), // a required status-check context on main
         }),
       ),
     ),
