@@ -25,3 +25,6 @@ security_context/archive_*/
 .DS_Store
 .idea/
 .vscode/
+
+# agent worktrees
+.claude/worktrees/
