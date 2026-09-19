@@ -56,7 +56,7 @@ if [ -n "$vercel_bin" ] && $vercel_bin whoami >/dev/null 2>&1; then
   while IFS= read -r line; do
     [ -n "$line" ] && vercel_scopes+=("$line")
   done < <($vercel_bin teams ls 2>&1 | awk 'seen && $1 != "" {print $1} $1 == "id" {seen=1}' | sed 's/^>//' | grep -vE '^$' || true)
-  printf 'DOCTOR login=vercel outcome=ok user=%s scopes=[%s]\n' "$($vercel_bin whoami 2>&1 | tail -n 1)" "${vercel_scopes[*]}"
+  printf 'DOCTOR login=vercel outcome=ok user=%s scopes=[%s]\n' "$($vercel_bin whoami 2>&1 | tail -n 1)" "${vercel_scopes[*]-}"
 else
   printf 'DOCTOR login=vercel outcome=missing hint="npm i -g vercel && vercel login"\n'
   status=1
@@ -71,7 +71,7 @@ if command -v npx >/dev/null 2>&1; then
     while IFS= read -r slug; do
       [ -n "$slug" ] && convex_teams+=("$slug")
     done < <(printf '%s\n' "$convex_status" | grep -oE '\(([a-z0-9-]+)\)$' | tr -d '()')
-    printf 'DOCTOR login=convex outcome=ok teams=[%s]\n' "${convex_teams[*]}"
+    printf 'DOCTOR login=convex outcome=ok teams=[%s]\n' "${convex_teams[*]-}"
   else
     printf 'DOCTOR login=convex outcome=missing hint="npx convex login"\n'
     status=1
@@ -101,15 +101,15 @@ pick_one() { [ "$#" -eq 1 ] && printf '%s' "$1"; }
 owner_candidates=("$gh_owner")
 for o in $gh_orgs; do owner_candidates+=("$o"); done
 printf 'DOCTOR candidates github_owner=[%s] VERCEL_SCOPE=[%s] CONVEX_TEAM=[%s] doppler_workplace=[%s]\n' \
-  "${owner_candidates[*]}" "${vercel_scopes[*]}" "${convex_teams[*]}" "$doppler_workplace"
+  "${owner_candidates[*]-}" "${vercel_scopes[*]-}" "${convex_teams[*]-}" "$doppler_workplace"
 [ "${#missing_cmds[@]}" -eq 0 ] || printf 'DOCTOR missing_cmds=[%s]\n' "${missing_cmds[*]}"
 
 # --- Optional write -----------------------------------------------------------------------
 if [ -n "$write_path" ]; then
   [ -e "$write_path" ] && die "refusing to overwrite $write_path"
   root="$(cd "$SCRIPT_DIR/../.." && pwd)"
-  scope=$(pick_one "${vercel_scopes[@]}" || true)
-  team=$(pick_one "${convex_teams[@]}" || true)
+  scope=$(pick_one ${vercel_scopes[@]+"${vercel_scopes[@]}"} || true)
+  team=$(pick_one ${convex_teams[@]+"${convex_teams[@]}"} || true)
   ws=$(expand_tilde "${FACTORY_WORKSPACE:-$HOME/Code/factory-workspace}")
   sed -e "s#^FACTORY_ROOT=.*#FACTORY_ROOT=$root#" \
       -e "s#^FACTORY_WORKSPACE=.*#FACTORY_WORKSPACE=$ws#" \
