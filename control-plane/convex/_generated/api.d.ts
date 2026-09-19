@@ -20,6 +20,7 @@ import type * as githubWebhook from "../githubWebhook.js";
 import type * as http from "../http.js";
 import type * as lib_factoryAuth from "../lib/factoryAuth.js";
 import type * as lib_securityLogger from "../lib/securityLogger.js";
+import type * as operator from "../operator.js";
 import type * as paymentAttemptTypes from "../paymentAttemptTypes.js";
 import type * as paymentAttempts from "../paymentAttempts.js";
 import type * as projects from "../projects.js";
@@ -50,6 +51,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   "lib/factoryAuth": typeof lib_factoryAuth;
   "lib/securityLogger": typeof lib_securityLogger;
+  operator: typeof operator;
   paymentAttemptTypes: typeof paymentAttemptTypes;
   paymentAttempts: typeof paymentAttempts;
   projects: typeof projects;

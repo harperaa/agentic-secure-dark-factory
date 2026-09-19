@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
 import { AdvancedSpecForm } from "./advanced-form";
 import { SpecChat } from "./chat";
 
@@ -17,6 +19,9 @@ type Tab = "chat" | "advanced";
  * newer draft becomes the form's initial state.
  */
 export default function NewSpecPage() {
+  // Remembered from this operator's last saved spec, so neither tab asks again for the two
+  // fields that are the same answer nearly every time. Both tabs read the one source.
+  const defaults = useQuery(api.operator.specDefaults);
   const [tab, setTab] = useState<Tab>("chat");
   const [handOff, setHandOff] = useState<SpecDoc | undefined>(undefined);
   const [handOffCount, setHandOffCount] = useState(0);
@@ -77,7 +82,7 @@ export default function NewSpecPage() {
           aria-labelledby="spec-tab-advanced"
           className="max-w-[72ch]"
         >
-          <AdvancedSpecForm key={handOffCount} initial={handOff} />
+          <AdvancedSpecForm key={`${handOffCount}:${defaults ? "ready" : "loading"}`} initial={handOff} {...(defaults ? { defaults } : {})} />
         </div>
       )}
     </div>

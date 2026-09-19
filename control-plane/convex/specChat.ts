@@ -53,8 +53,9 @@ Defaults, unless the operator says otherwise:
 Never invent a credential, key, or identifier you were not given. Optional blocks such as
 "clerk" hold real provider values and are validated against their real formats, so a placeholder
 is rejected and the operator sees an error instead of a draft: leave the whole block out unless
-they supply actual values. The same goes for admin_email and github_owner -- ask for those two
-rather than guessing, and draft the rest around them.
+they supply actual values. admin_email and github_owner are the exception only when you have
+not been given them: never invent those two either, but if the defaults below supply them, use
+them without asking.
 
 secrets_mode and providers.secrets must agree, and the schema enforces it:
 - secrets_mode "doppler" requires providers.secrets to be "doppler" if you set it at all.
@@ -165,8 +166,10 @@ export const draft = action({
     messages: v.array(messageValidator),
     /** The draft currently on screen, so the model refines rather than restarts. */
     current: v.optional(v.any()),
+    /** What this operator's last spec used, so the chat stops asking for it every time. */
+    defaults: v.optional(v.object({ admin_email: v.string(), github_owner: v.string() })),
   },
-  handler: async (_ctx, { messages, current }) => {
+  handler: async (_ctx, { messages, current, defaults }) => {
     if (!process.env.ANTHROPIC_API_KEY) {
       return {
         reply:
@@ -184,10 +187,20 @@ export const draft = action({
       content: m.text,
     }));
 
-    // The current draft is context, not history: it tells the model what it is editing.
-    const system = current
-      ? `${SYSTEM}\n\nThe draft currently on screen:\n${JSON.stringify(current, null, 2)}`
-      : SYSTEM;
+    // Defaults and the current draft are context, not history: they say what the model is
+    // working from and what it is editing. Only non-empty defaults are stated, so a first-ever
+    // spec does not get told the owner is "".
+    const known = Object.entries(defaults ?? {})
+      .filter(([, value]) => value !== "")
+      .map(([key, value]) => `- ${key}: ${value}`);
+    const system = [
+      SYSTEM,
+      known.length > 0
+        ? `Defaults for this operator, from the last spec they saved. Use them without asking, ` +
+          `and follow any correction they make:\n${known.join("\n")}`
+        : "",
+      current ? `The draft currently on screen:\n${JSON.stringify(current, null, 2)}` : "",
+    ].filter(Boolean).join("\n\n");
 
     // Streamed, with room to finish. A spec with five phases and their acceptance criteria is a
     // large tool input, and adaptive thinking spends from the same budget: at 16k the turn was

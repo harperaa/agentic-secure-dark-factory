@@ -68,7 +68,14 @@ function num(spec: SpecDoc | undefined, key: string, fallback: number): number {
  * `initial` prefills the form from a chat draft, so "Open in Advanced" hands the document over
  * rather than making the operator retype it. It is read once, as the initial state.
  */
-export function AdvancedSpecForm({ initial }: { initial?: SpecDoc }) {
+export function AdvancedSpecForm({
+  initial,
+  defaults,
+}: {
+  initial?: SpecDoc;
+  /** Remembered from this operator's last spec; `initial` (a chat draft) wins over it. */
+  defaults?: { admin_email: string; github_owner: string };
+}) {
   const router = useRouter();
   const createFromSpec = useMutation(api.projects.createFromSpec);
   const startLine = useMutation(api.projects.startLine);
@@ -80,8 +87,8 @@ export function AdvancedSpecForm({ initial }: { initial?: SpecDoc }) {
 
   const [name, setName] = useState(() => str(initial, "name"));
   const [pitch, setPitch] = useState(() => str(initial, "pitch"));
-  const [adminEmail, setAdminEmail] = useState(() => str(initial, "admin_email"));
-  const [owner, setOwner] = useState(() => str(initial, "github_owner"));
+  const [adminEmail, setAdminEmail] = useState(() => str(initial, "admin_email") || (defaults?.admin_email ?? ""));
+  const [owner, setOwner] = useState(() => str(initial, "github_owner") || (defaults?.github_owner ?? ""));
   const [modules, setModules] = useState(() => list(initial, "modules"));
   const [secretsMode, setSecretsMode] = useState<"doppler" | "env">(() => (str(initial, "secrets_mode", "doppler") === "env" ? "env" : "doppler"));
   const [phases, setPhases] = useState<Phase[]>(() => phasesFrom(initial));

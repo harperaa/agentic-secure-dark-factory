@@ -1,6 +1,7 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { requireOperator } from "./lib/factoryAuth";
+import { rememberSpecDefaults } from "./operator";
 import { modeValidator, providerProfileValidator } from "./factoryTables";
 
 /** Floor: every project with its station state. */
@@ -74,6 +75,8 @@ export const createFromSpec = mutation({
       action: "project.create",
       after: { name: s.name, mode: s.mode },
     });
+    // The next spec should not ask again for what this one answered.
+    await rememberSpecDefaults(ctx, spec as { admin_email?: unknown; github_owner?: unknown });
     return projectId;
   },
 });

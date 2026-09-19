@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useAction, useMutation } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { errorCopy } from "@/lib/factory/copy";
@@ -86,6 +86,9 @@ function SpecSummary({ spec }: { spec: SpecDoc }) {
 export function SpecChat({ onHandOff }: { onHandOff: (spec: SpecDoc) => void }) {
   const router = useRouter();
   const draft = useAction(api.specChat.draft);
+  // What this operator's last spec used. The chat gets it so it can fill admin_email and
+  // github_owner instead of opening with two questions it already knows the answers to.
+  const defaults = useQuery(api.operator.specDefaults);
   const createFromSpec = useMutation(api.projects.createFromSpec);
   const startLine = useMutation(api.projects.startLine);
 
@@ -116,6 +119,7 @@ export function SpecChat({ onHandOff }: { onHandOff: (spec: SpecDoc) => void }) 
       const result = await draft({
         messages: next.map((t) => ({ role: t.role, text: t.text })),
         current: spec ?? undefined,
+        ...(defaults ? { defaults } : {}),
       });
       setTurns((ts) => [...ts, { role: "assistant", text: result.reply }]);
       if (result.spec) {
