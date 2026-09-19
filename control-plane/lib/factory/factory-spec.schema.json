@@ -270,8 +270,10 @@
           "type": "string",
           "enum": [
             "greptile",
-            "self-hosted"
-          ]
+            "self-hosted",
+            "none"
+          ],
+          "description": "AI reviewer. `none` means the review gate is CI only; a project without a reviewer never auto-merges (dark mode is refused for it)."
         },
         "scm": {
           "type": "string",
