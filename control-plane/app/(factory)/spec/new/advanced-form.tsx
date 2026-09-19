@@ -143,6 +143,25 @@ export function AdvancedSpecForm({
     }
   }
 
+  async function saveAndRun() {
+    const spec = buildSpec();
+    if (!validate(spec)) {
+      setErrors((validate.errors ?? []).map((e) => `${e.instancePath || "spec"} ${e.message ?? ""}`.trim()));
+      return;
+    }
+    setErrors([]);
+    setBusy(true);
+    try {
+      const id = await createFromSpec({ spec });
+      setCreated(id);
+      await startLine({ projectId: id });
+      router.push(`/projects/${id}`);
+    } catch (err) {
+      setErrors([errorCopy(err)]);
+      setBusy(false);
+    }
+  }
+
   async function start() {
     if (!created) {
       return;
@@ -317,11 +336,20 @@ export function AdvancedSpecForm({
             Start the line
           </ButtonPrimary>
         ) : (
-          <ButtonPrimary disabled={busy} onClick={submit}>
-            Save spec
-          </ButtonPrimary>
+          <>
+            <ButtonPrimary disabled={busy} onClick={saveAndRun}>
+              Save and run
+            </ButtonPrimary>
+            <ButtonSecondary disabled={busy} onClick={submit}>
+              Save only
+            </ButtonSecondary>
+          </>
         )}
-        {created && <p className="self-center text-[length:var(--text-14)] text-ink-muted">Saved. Starting the line creates real provider resources.</p>}
+        <p className="self-center text-[length:var(--text-14)] text-ink-muted">
+          {created
+            ? "Saved as a draft. Starting the line creates real provider resources."
+            : "Save and run starts genesis now and creates real provider resources. Save only keeps it as a draft you can start later."}
+        </p>
       </div>
     </div>
   );

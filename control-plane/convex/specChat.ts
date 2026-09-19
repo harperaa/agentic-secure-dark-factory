@@ -50,12 +50,9 @@ Defaults, unless the operator says otherwise:
   them without the operator saying so.
 - providers: profile "default", sandbox "local".
 
-Never invent a credential, key, or identifier you were not given. Optional blocks such as
-"clerk" hold real provider values and are validated against their real formats, so a placeholder
-is rejected and the operator sees an error instead of a draft: leave the whole block out unless
-they supply actual values. admin_email and github_owner are the exception only when you have
-not been given them: never invent those two either, but if the defaults below supply them, use
-them without asking.
+Never invent a credential, key, or identifier you were not given. Never invent admin_email or
+github_owner either: if the defaults below supply them, use them without asking; otherwise ask
+for them and draft the rest around them.
 
 secrets_mode and providers.secrets must agree, and the schema enforces it:
 - secrets_mode "doppler" requires providers.secrets to be "doppler" if you set it at all.
@@ -74,37 +71,37 @@ addFormats(ajv);
 const validateSpec = ajv.compile(schema as object);
 
 /**
- * A tool's input_schema accepts a subset of JSON Schema: no oneOf/allOf/anyOf at the top level,
- * and no `uniqueItems` on an array, among others. The factory-spec schema uses both, so it
- * cannot be handed over as-is -- the API rejects the whole request with a 400.
+ * A tool's input_schema accepts a subset of JSON Schema, so the factory-spec schema cannot be
+ * handed over as-is: the API rejects the whole request with a 400.
  *
  * Rather than maintain a second, hand-written schema that would drift from the real one, derive
- * the tool's copy from it: keep everything that defines shape (type, properties, required,
- * items, enum, const, additionalProperties) and drop the rest.
+ * the tool's copy by removing only what the API refuses. Ajv above keeps the complete schema and
+ * remains the check that decides, so a dropped constraint relaxes nothing -- but it does cost the
+ * model a hint it would otherwise honour.
  *
- * Dropping a constraint from the *tool* schema does not relax anything, because Ajv above holds
- * the complete schema and is what accepts or rejects a draft. It would, though, cost the model
- * the hint -- it would stop seeing that `name` is a slug, and produce "Fitness App" only to have
- * Ajv reject it. So each dropped constraint is restated in that property's description, where
- * the model still reads it. The conditional coherence rules have no single property to attach
- * to and are stated in the system prompt instead.
+ * Hence a denylist rather than an allowlist, deliberately: an allowlist also dropped `minItems`,
+ * which let the model send `phases: []` and turned a draft into "must NOT have fewer than 1
+ * items". A constraint the API accepts should reach the model, where it prevents the mistake
+ * instead of reporting it.
  */
-const SHAPE_KEYWORDS = new Set([
-  "type", "properties", "required", "items", "enum", "const",
-  "additionalProperties", "description", "title",
+const UNSUPPORTED = new Set([
+  // Rejected per type, discovered from the API's own 400s:
+  //   "For 'array' type, property 'uniqueItems' is not supported"
+  //   "For 'integer' type, properties maximum, minimum are not supported"
+  "uniqueItems", "minimum", "maximum",
+  // "input_schema does not support oneOf, allOf, or anyOf at the top level". The spec schema
+  // uses allOf for its secrets_mode/providers.secrets coherence rules, which the system prompt
+  // states in prose instead.
+  "allOf", "anyOf", "oneOf", "not", "if", "then", "else",
+  // Document metadata, meaningless to a tool schema.
+  "$schema", "$id",
 ]);
 
-/** Dropped constraints, rendered as the note appended to a property's description. */
+/** A dropped constraint still worth telling the model, appended to the property's description. */
 const NOTE: Record<string, (v: unknown) => string> = {
-  pattern: (v) => `must match ${v}`,
-  format: (v) => `${v} format`,
-  minLength: (v) => `at least ${v} characters`,
-  maxLength: (v) => `at most ${v} characters`,
+  uniqueItems: () => "entries must be unique",
   minimum: (v) => `minimum ${v}`,
   maximum: (v) => `maximum ${v}`,
-  minItems: (v) => `at least ${v} item${v === 1 ? "" : "s"}`,
-  uniqueItems: () => "entries must be unique",
-  default: (v) => `defaults to ${JSON.stringify(v)}`,
 };
 
 function toToolSchema(node: unknown): unknown {
@@ -119,7 +116,7 @@ function toToolSchema(node: unknown): unknown {
   const notes: string[] = [];
 
   for (const [key, value] of Object.entries(source)) {
-    if (SHAPE_KEYWORDS.has(key)) {
+    if (!UNSUPPORTED.has(key)) {
       // `properties` maps names to schemas, so recurse into the values, not the map itself.
       out[key] = key === "properties" && value && typeof value === "object"
         ? Object.fromEntries(
@@ -129,7 +126,6 @@ function toToolSchema(node: unknown): unknown {
     } else if (key in NOTE) {
       notes.push(NOTE[key]!(value));
     }
-    // Everything else ($schema, $id, allOf, if/then) is dropped without a note.
   }
 
   if (notes.length > 0) {
@@ -139,7 +135,30 @@ function toToolSchema(node: unknown): unknown {
   return out;
 }
 
-const toolSchema = toToolSchema(schema) as Record<string, unknown>;
+/**
+ * Optional blocks carrying real provider credentials, withheld from the tool schema entirely so
+ * the model cannot emit them -- not merely instructed not to.
+ *
+ * Telling it not to invent a key was not enough: it kept filling clerk.publishable_key with a
+ * plausible placeholder, Ajv rejected it against the real ^pk_(test|live)_ pattern, and the
+ * operator got a validation error where a draft should have been. A prompt rule discourages;
+ * removing the property makes it impossible.
+ *
+ * Nothing is lost. Both fields are optional, the Advanced form never sets them either, and a
+ * drafted document is the wrong place for a credential regardless.
+ */
+const CREDENTIAL_BLOCKS = new Set(["clerk"]);
+
+const toolSchema = (() => {
+  const derived = toToolSchema(schema) as Record<string, unknown>;
+  const properties = derived.properties as Record<string, unknown> | undefined;
+  if (properties) {
+    derived.properties = Object.fromEntries(
+      Object.entries(properties).filter(([key]) => !CREDENTIAL_BLOCKS.has(key)),
+    );
+  }
+  return derived;
+})();
 
 /** A chat turn as the page holds it. Assistant turns carry the draft that turn produced. */
 const messageValidator = v.object({

@@ -151,6 +151,23 @@ export function SpecChat({ onHandOff }: { onHandOff: (spec: SpecDoc) => void }) 
     }
   }
 
+  async function saveAndRun() {
+    if (!spec) {
+      return;
+    }
+    setBusy(true);
+    setErrors([]);
+    try {
+      const id = await createFromSpec({ spec });
+      setCreated(id);
+      await startLine({ projectId: id });
+      router.push(`/projects/${id}`);
+    } catch (err) {
+      setErrors([errorCopy(err)]);
+      setBusy(false);
+    }
+  }
+
   async function start() {
     if (!created) {
       return;
@@ -252,14 +269,19 @@ export function SpecChat({ onHandOff }: { onHandOff: (spec: SpecDoc) => void }) 
                 Start the line
               </ButtonPrimary>
             ) : (
-              <ButtonPrimary disabled={busy} onClick={() => void save()}>
-                Save spec
-              </ButtonPrimary>
+              <>
+                <ButtonPrimary disabled={busy} onClick={() => void saveAndRun()}>
+                  Save and run
+                </ButtonPrimary>
+                <ButtonSecondary disabled={busy} onClick={() => void save()}>
+                  Save only
+                </ButtonSecondary>
+              </>
             )}
             <p className="text-[length:var(--text-14)] text-ink-muted">
               {created
-                ? "Saved. Starting the line creates real provider resources."
-                : "Review it before saving. Nothing is created until you do."}
+                ? "Saved as a draft. Starting the line creates real provider resources."
+                : "Save and run starts the line now, which creates real provider resources."}
             </p>
           </div>
         )}
