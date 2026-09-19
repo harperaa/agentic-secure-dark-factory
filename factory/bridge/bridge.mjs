@@ -99,6 +99,67 @@ function prFromForemanState(ref) {
   return pr ? Number(pr[2]) : undefined;
 }
 
+// Executors narrate themselves one line at a time: `GENESIS step=clone outcome=passed`, from
+// log() in factory/scripts/lib/common.sh. That narration never left the worker -- the control
+// plane learned only the final state -- so a station sat on "running" for twenty minutes with
+// nothing to say. Read it on every poll and give the floor the step the run is actually on.
+const STEP_LINE = /^([A-Z][A-Z_]*) step=(\S+) outcome=(\S+)/;
+
+// A note is a label on a station, not a log line: one sentence, no escape codes, bounded so it
+// cannot push the rest of the floor off screen. The whole text stays in the run's events and in
+// run.error -- this is the part that fits under a station.
+const NOTE_MAX = 200;
+
+function toNote(line) {
+  // eslint-disable-next-line no-control-regex
+  const clean = line.replace(/\u001b\[[0-9;]*m/g, "").trim();
+  return clean.length > NOTE_MAX ? `${clean.slice(0, NOTE_MAX - 1)}…` : clean;
+}
+
+// The two kinds of stage narrate themselves differently, and a floor that only understood one
+// would be blank for the other. Script stages (genesis, deploy-dev) print step lines. Agent
+// stages (foreman, assess, greptile-fix, triage) stream Claude Code events, among them a
+// purpose-built one:
+//   {"type":"system","subtype":"task_progress","description":"Running Check nav anchors"}
+// which is already written for a person to read. Both are the executor's own account of itself.
+const TASK_PROGRESS = /"subtype":"task_progress"[^\n]*?"description":"((?:[^"\\]|\\.)*)"/g;
+
+function parseProgress(text) {
+  let step, outcome, note;
+  const finished = new Set();
+  for (const line of text.split("\n")) {
+    const m = line.match(STEP_LINE);
+    if (m) {
+      [, , step, outcome] = m;
+      // "started" is the step in flight; anything else is a step that reached an end.
+      if (outcome !== "started") finished.add(m[2]);
+      continue;
+    }
+    // Keep the most recent failure line: when a run stops, this is the sentence worth showing.
+    if (/^(ERROR|NEEDS_HUMAN|MISSING_ENV|MISSING_ARG)\b/.test(line)) note = toNote(line);
+  }
+
+  if (!step) {
+    // No step lines: either an agent stage, or a script that died before its first step.
+    const tasks = [...text.matchAll(TASK_PROGRESS)].map((m) => m[1]);
+    if (tasks.length > 0) {
+      // Distinct descriptions, because a task repeats its line on every heartbeat. This counts
+      // work observed, not a fraction of a known total -- an agent has no fixed step list.
+      return {
+        step: toNote(tasks[tasks.length - 1].replace(/\\"/g, '"')),
+        outcome: "started",
+        done: new Set(tasks).size,
+        at: Date.now(),
+        ...(note ? { note } : {}),
+      };
+    }
+    // A run can fail before anything announces itself -- a missing provider env is rejected up
+    // front -- and that is exactly when the operator most needs the reason.
+    return note ? { step: "—", outcome: "failed", done: 0, at: Date.now(), note } : undefined;
+  }
+  return { step, outcome, done: finished.size, at: Date.now(), ...(note ? { note } : {}) };
+}
+
 function parseOutput(text) {
   const lines = text.split("\n");
   const resultLine = [...lines].reverse().find((l) => /^(RESULT|DEPLOY_RESULT|ASSESS_RESULT|GREPTILE_FIX|TRIAGE) /.test(l));
@@ -116,7 +177,15 @@ async function reconcileRuns() {
     if (!job) continue;
     const mrun = job.runs?.[job.runs.length - 1];
     if (mrun) {
-      await convex.mutation(api.bridge.mirror, { secret, runId, machinistRunId: mrun.id, ...(mrun.executor ? { executor: mrun.executor } : {}) });
+      // readEvents works mid-run, so the operator sees the step while it is still happening.
+      const progress = parseProgress(readEvents(mrun.id));
+      await convex.mutation(api.bridge.mirror, {
+        secret,
+        runId,
+        machinistRunId: mrun.id,
+        ...(mrun.executor ? { executor: mrun.executor } : {}),
+        ...(progress ? { progress } : {}),
+      });
     }
     if (["succeeded", "failed", "cancelled", "timed_out"].includes(job.state)) {
       const out = mrun ? readEvents(mrun.id) : "";

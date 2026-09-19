@@ -95,6 +95,37 @@ export const factoryTables = {
     exitCode: v.optional(v.number()),
     error: v.optional(v.string()),
     resultLine: v.optional(v.string()), // the final RESULT / *_RESULT line parsed from events
+    /**
+     * Where inside the stage the run currently is (design §4.12). A stage is one Machinist run,
+     * but a run is many steps -- genesis alone is a dozen -- and a station that only says
+     * "running" for twenty minutes tells the operator nothing about whether to wait or intervene.
+     *
+     * Written by the bridge on every poll from the run's own `STAGE step=NAME outcome=X` lines,
+     * so it is the executor's account of itself, not a guess from elapsed time.
+     */
+    progress: v.optional(
+      v.object({
+        step: v.string(), // the step named on the most recent line, e.g. "convex-setup"
+        outcome: v.string(), // started | passed | failed | skipped
+        done: v.number(), // steps finished so far, for "4 of ~12"
+        at: v.number(), // when the bridge last observed this; refreshed every poll
+        /**
+         * When this step began, held across polls so the floor can say how long it has been on
+         * it. Set by bridge.mirror when the step name changes, never by the bridge itself: the
+         * bridge re-reads the whole log each poll and is restarted freely, so it cannot know
+         * when a step started -- only the stored value can.
+         *
+         * A step that stops advancing is the signal worth surfacing. "convex-setup, 4m" reads
+         * very differently from "convex-setup, 20s", and neither is visible from `at` alone.
+         *
+         * Optional because rows written before this existed have none, and because a schema that
+         * requires it would refuse to deploy over them. Readers fall back to `at`, which makes
+         * the clock start now rather than lie about the past.
+         */
+        since: v.optional(v.number()),
+        note: v.optional(v.string()), // the last ERROR/NEEDS_HUMAN line, when there is one
+      }),
+    ),
     tokenUsage: v.optional(
       v.object({
         input: v.number(),

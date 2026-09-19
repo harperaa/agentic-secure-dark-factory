@@ -57,10 +57,36 @@ export const mirror = mutation({
     commandHash: v.optional(v.string()),
     executor: v.optional(v.string()),
     model: v.optional(v.string()),
+    /**
+     * Step-level progress read from the run's events; see runs.progress. `since` is absent here
+     * on purpose -- the bridge re-reads the whole log each poll and restarts freely, so it is
+     * the stored row, not the bridge, that knows when a step began.
+     */
+    progress: v.optional(
+      v.object({
+        step: v.string(),
+        outcome: v.string(),
+        done: v.number(),
+        at: v.number(),
+        note: v.optional(v.string()),
+      }),
+    ),
   },
-  handler: async (ctx, { secret, runId, ...fields }) => {
+  handler: async (ctx, { secret, runId, progress, ...fields }) => {
     requireBridge(secret);
-    const patch = Object.fromEntries(Object.entries(fields).filter(([, val]) => val !== undefined));
+    const patch: Record<string, unknown> = Object.fromEntries(
+      Object.entries(fields).filter(([, val]) => val !== undefined),
+    );
+    if (progress) {
+      const previous = (await ctx.db.get(runId))?.progress;
+      // A step keeps its start time for as long as it is the same step. Comparing the name is
+      // what makes the clock mean "how long on this step" rather than "how long since the last
+      // poll", which would always read as a few seconds.
+      patch.progress = {
+        ...progress,
+        since: previous?.step === progress.step ? (previous.since ?? progress.at) : progress.at,
+      };
+    }
     await ctx.db.patch(runId, patch);
   },
 });
