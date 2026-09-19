@@ -33,7 +33,7 @@ export function Line({
   const now = useNow();
   const stations = stationsFor(project, { reviewScore: reviewScore ?? null, ...(lastRunStage === undefined ? {} : { lastRunStage }) });
   const currentIndex = stations.findIndex((s) => s.state === "running" || s.state === "hold" || s.state === "stop");
-  const stationWidth = compact ? 44 : 88;
+  const stationWidth = compact ? 84 : 96;
   const gap = compact ? 6 : 8;
 
   // Announce station changes for screen readers; suppress the announcement on first paint.
@@ -75,8 +75,11 @@ export function Line({
             aria-current={i === currentIndex ? "step" : undefined}
           >
             <div className="flex items-center justify-between gap-1 leading-none">
-              <span className={`${compact ? "text-[length:var(--text-12)]" : "text-[length:var(--text-14)]"} font-medium`}>
-                {compact ? s.short : s.label}
+              <span
+                className={`${compact ? "text-[length:var(--text-12)]" : "text-[length:var(--text-14)]"} min-w-0 truncate font-medium`}
+                title={s.label}
+              >
+                {s.label}
               </span>
               <Andon state={s.state} />
             </div>
