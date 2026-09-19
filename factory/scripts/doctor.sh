@@ -55,7 +55,8 @@ if [ -n "$vercel_bin" ] && $vercel_bin whoami >/dev/null 2>&1; then
   # The Vercel CLI prints its table on stderr; take the first column after the "id" header.
   while IFS= read -r line; do
     [ -n "$line" ] && vercel_scopes+=("$line")
-  done < <($vercel_bin teams ls 2>&1 | awk 'seen && $1 != "" {print $1} $1 == "id" {seen=1}' | sed 's/^>//' | grep -vE '^$' || true)
+  # Strip the current-scope marker before awk splits fields, or $1 is the marker, not the slug.
+  done < <($vercel_bin teams ls 2>&1 | sed 's/^[✔>*] *//' | awk 'seen && $1 != "" {print $1} $1 == "id" {seen=1}' | grep -vE '^$' || true)
   printf 'DOCTOR login=vercel outcome=ok user=%s scopes=[%s]\n' "$($vercel_bin whoami 2>&1 | tail -n 1)" "${vercel_scopes[*]-}"
 else
   printf 'DOCTOR login=vercel outcome=missing hint="npm i -g vercel && vercel login"\n'
