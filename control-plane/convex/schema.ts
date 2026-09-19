@@ -10,6 +10,11 @@ export default defineSchema({
       externalId: v.string(),
       // Primary email from Clerk
       email: v.optional(v.string()),
+      // Spec defaults remembered from the last spec this operator wrote, so the Spec screen
+      // stops asking for what it already knows. upsertFromClerk patches rather than replaces,
+      // so a Clerk sync leaves these alone.
+      specAdminEmail: v.optional(v.string()),
+      specGithubOwner: v.optional(v.string()),
     })
       .index("byExternalId", ["externalId"])
       .index("byEmail", ["email"]),
