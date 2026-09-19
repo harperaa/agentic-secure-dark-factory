@@ -10,6 +10,8 @@
   "scripts": {
     "dev": "next dev",
     "dev:doppler": "doppler run -- next dev",
+    "dev:all": "node scripts/dev.mjs",
+    "dev:all:doppler": "doppler run -- node scripts/dev.mjs",
     "convex": "npx convex dev",
     "convex:doppler": "doppler run -- npx convex dev",
     "build": "next build",
