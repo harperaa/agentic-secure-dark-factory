@@ -400,13 +400,83 @@ async function runInit(args) {
  * Returns true only on a positive answer — any error means "cannot confirm",
  * which callers must treat as not-deployed.
  */
+/**
+ * Timeouts for child CLIs, in ms. Named so the reason for each is visible and they are not
+ * tuned by guesswork.
+ *
+ * CONVEX_CREATE covers the coldest path there is: create a project, provision a cloud dev
+ * deployment, bundle, and push, on a checkout whose node_modules were installed seconds ago.
+ * At 120s that was killed mid-push -- the log stopped at "Preparing Convex functions..." -- and
+ * genesis reported convex_functions_not_deployed for a push that then landed on its own. The
+ * genesis command itself has 45m, so these can afford to be generous; a timeout here is a
+ * failed build, while waiting a few more minutes costs nothing.
+ */
+const TIMEOUT = {
+  CONVEX_CREATE: 600_000,
+  CONVEX_PUSH: 600_000,
+  CONVEX_VERIFY: 120_000,
+  CONVEX_ENV_SET: 60_000,
+  CONVEX_LOGIN: 30_000,
+};
+
+/**
+ * Put a child process's output in the run log, whole.
+ *
+ * Child CLIs run with stdio 'pipe', so their output is invisible unless we say it: it reaches us
+ * only through the captured buffers, and embedding a truncated copy in a JSON field is how a
+ * genesis failure arrives with the actual error cut off mid-sentence.
+ *
+ * Every line goes to stderr, prefixed. stderr because stdout carries the JSON contract genesis
+ * parses; prefixed because last_json_line() keys on a line starting with "{", and a child that
+ * printed JSON of its own would otherwise be mistaken for our result.
+ */
+function logChildOutput(label, text) {
+  if (!text) {
+    return;
+  }
+  for (const line of String(text).split('\n')) {
+    process.stderr.write(`  [${label}] ${line}\n`);
+  }
+}
+
+/**
+ * Run a child CLI to completion and put everything it said in the run log, whatever the outcome.
+ *
+ * spawnSync rather than execSync: execSync returns stdout alone on success, so a push that
+ * succeeded with warnings on stderr left no trace of them. The buffer is sized for a verbose
+ * Convex push; the default 1 MiB would kill the child (ENOBUFS) and keep only part of what it
+ * printed, which is the truncation this is meant to end. `timedOut` is set only for our own
+ * timeout; a child ended by some other signal is reported as that signal, not as a timeout.
+ */
+function runChild(cmd, { timeout, label = cmd }) {
+  const r = spawnSync(cmd, {
+    cwd: ROOT_DIR,
+    shell: true,
+    encoding: 'utf-8',
+    stdio: 'pipe',
+    timeout,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const output = `${r.stdout || ''}${r.stderr || ''}`.trim();
+  logChildOutput(label, output);
+  const timedOut = r.error?.code === 'ETIMEDOUT';
+  if (timedOut) {
+    process.stderr.write(`  [${label}] timed out after ${timeout}ms; the push may still land, verifying\n`);
+  } else if (r.signal) {
+    process.stderr.write(`  [${label}] ended by signal ${r.signal}\n`);
+  } else if (r.error) {
+    process.stderr.write(`  [${label}] ${r.error.message}\n`);
+  }
+  return { ok: r.status === 0 && !r.error, status: r.status, signal: r.signal, output, timedOut, error: r.error };
+}
+
 function convexFunctionsLive({ prod = false } = {}) {
   try {
     const out = execSync(`npx convex function-spec${prod ? ' --prod' : ''}`, {
       cwd: ROOT_DIR,
       encoding: 'utf-8',
       stdio: 'pipe',
-      timeout: 60000,
+      timeout: TIMEOUT.CONVEX_VERIFY,
     });
     const spec = JSON.parse(out);
     return (
@@ -434,19 +504,8 @@ function convexFunctionsLive({ prod = false } = {}) {
  */
 function pushConvexAndVerify({ prod = false } = {}) {
   const cmd = prod ? 'npx convex deploy' : 'npx convex dev --once';
-  let detail = '';
-  try {
-    execSync(cmd, {
-      cwd: ROOT_DIR,
-      encoding: 'utf-8',
-      stdio: 'pipe',
-      timeout: 180000,
-    });
-  } catch (err) {
-    detail = ((err.stdout || '') + (err.stderr || '') + (err.message || ''))
-      .trim()
-      .substring(0, 800);
-  }
+  const push = runChild(cmd, { timeout: TIMEOUT.CONVEX_PUSH });
+  const detail = push.ok ? '' : `${push.output}\n${push.error?.message || ''}`.trim();
   // Verify regardless of exit code — a non-zero exit with a successful push is
   // common (typecheck warnings), and so is a zero exit with nothing deployed.
   if (convexFunctionsLive({ prod })) {
@@ -704,7 +763,7 @@ async function runConfigure(args) {
         execSync(`npx convex env set ${key} "${value}"`, {
           cwd: ROOT_DIR,
           stdio: 'pipe',
-          timeout: 30000,
+          timeout: TIMEOUT.CONVEX_ENV_SET,
         });
         result.convexEnvVarsSet.push(key);
         result.steps.push(`Set Convex env var: ${key}`);
@@ -791,12 +850,7 @@ async function runConvexSetup(args) {
   if (deployment && !deployment.includes('your_') && deployment !== '' &&
       convexUrl && !convexUrl.includes('your_') && convexUrl !== '') {
     // Already configured — try syncing
-    try {
-      execSync('npx convex dev --once', {
-        cwd: ROOT_DIR,
-        stdio: 'pipe',
-        timeout: 120000,
-      });
+    if (runChild('npx convex dev --once', { timeout: TIMEOUT.CONVEX_PUSH }).ok) {
       result.success = true;
       result.alreadyConfigured = true;
       result.steps.push('Convex already configured, synced successfully');
@@ -804,10 +858,9 @@ async function runConvexSetup(args) {
       result.url = convexUrl;
       console.log(JSON.stringify(result, null, 2));
       return;
-    } catch {
-      // Config exists but sync failed — fall through to fresh setup
-      result.steps.push('Existing configuration found but sync failed, proceeding with setup');
     }
+    // Config exists but sync failed — fall through to fresh setup
+    result.steps.push('Existing configuration found but sync failed, proceeding with setup');
   }
 
   // Step 2: Check login status
@@ -816,7 +869,7 @@ async function runConvexSetup(args) {
     loginOutput = execSync('npx convex login status 2>&1', {
       cwd: ROOT_DIR,
       encoding: 'utf-8',
-      timeout: 15000,
+      timeout: TIMEOUT.CONVEX_LOGIN,
     });
   } catch (err) {
     loginOutput = (err.stdout || '') + (err.stderr || '');
@@ -883,36 +936,24 @@ async function runConvexSetup(args) {
     }
   }
 
-  // Step 7: Create project via Convex CLI (non-interactive)
-  try {
-    const cmd = [
-      'npx convex dev --once',
-      `--configure=new`,
-      `--team="${selectedTeam}"`,
-      `--project="${projectSlug}"`,
-      `--dev-deployment=cloud`,
-    ].join(' ');
-
-    const output = execSync(cmd, {
-      cwd: ROOT_DIR,
-      encoding: 'utf-8',
-      stdio: 'pipe',
-      timeout: 120000,
-    });
+  // Step 7: Create project via Convex CLI (non-interactive). runChild logs everything the CLI
+  // said before any branching, so whatever we decide next the operator can read it; a timed-out
+  // child still has everything it printed up to the kill, which is exactly the part worth seeing.
+  const createCmd = [
+    'npx convex dev --once',
+    `--configure=new`,
+    `--team="${selectedTeam}"`,
+    `--project="${projectSlug}"`,
+    `--dev-deployment=cloud`,
+  ].join(' ');
+  const created = runChild(createCmd, { timeout: TIMEOUT.CONVEX_CREATE, label: 'convex dev --once --configure=new' });
+  if (created.ok) {
     result.steps.push('Convex project created and functions deployed');
-
-    if (output) {
-      // Capture any useful info from output
-      const lines = output.split('\n').filter(l => l.trim());
-      if (lines.length > 0) {
-        result.steps.push(`CLI output: ${lines.slice(-3).join(' | ')}`);
-      }
-    }
-  } catch (err) {
+  } else {
     // The Convex CLI may exit non-zero but still succeed in creating the project
     // and writing to .env.local (e.g. due to warnings or typecheck issues).
     // Check .env.local before reporting failure.
-    const errOutput = ((err.stdout || '') + (err.stderr || '')).trim();
+    const errOutput = created.output;
     const fallbackEnv = readEnvFile(ENV_FILE);
     const fallbackDeployment = getEnvValue(fallbackEnv, 'CONVEX_DEPLOYMENT');
     const fallbackUrl = getEnvValue(fallbackEnv, 'NEXT_PUBLIC_CONVEX_URL');
@@ -935,7 +976,7 @@ async function runConvexSetup(args) {
           console.log(JSON.stringify({
             success: false,
             error: 'convex_functions_not_deployed',
-            detail: (errOutput || retry.detail).substring(0, 1000),
+            detail: errOutput || retry.detail,
             hint: 'The Convex project exists but its functions were never pushed. Run: npx convex dev --once',
             steps: result.steps,
           }));
@@ -946,7 +987,7 @@ async function runConvexSetup(args) {
       console.log(JSON.stringify({
         success: false,
         error: `Convex project creation failed`,
-        detail: errOutput.substring(0, 1000),
+        detail: errOutput,
         hint: 'Try running manually: npx convex dev --once',
         steps: result.steps,
       }));
