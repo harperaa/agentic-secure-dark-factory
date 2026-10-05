@@ -126,14 +126,7 @@ export const factoryTables = {
         note: v.optional(v.string()), // the last ERROR/NEEDS_HUMAN line, when there is one
       }),
     ),
-    tokenUsage: v.optional(
-      v.object({
-        input: v.number(),
-        output: v.number(),
-        cacheRead: v.optional(v.number()),
-        cacheWrite: v.optional(v.number()),
-      }),
-    ),
+    tokenUsage: v.optional(v.number()), // total tokens, as Machinist reports them
     ref: v.optional(v.string()), // issue or PR URL the run worked on
     headSha: v.optional(v.string()),
     queuedAt: v.number(),

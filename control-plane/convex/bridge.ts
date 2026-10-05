@@ -100,14 +100,7 @@ export const complete = mutation({
     exitCode: v.optional(v.number()),
     error: v.optional(v.string()),
     resultLine: v.optional(v.string()),
-    tokenUsage: v.optional(
-      v.object({
-        input: v.number(),
-        output: v.number(),
-        cacheRead: v.optional(v.number()),
-        cacheWrite: v.optional(v.number()),
-      }),
-    ),
+    tokenUsage: v.optional(v.number()), // Machinist result.json token_usage: one total
     headSha: v.optional(v.string()),
     pr: v.optional(v.number()),
   },

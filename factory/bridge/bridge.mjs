@@ -62,18 +62,12 @@ async function submitRun(run) {
 function readTokenUsage(machinistRunId) {
   const r = sh("bash", ["-c", `ls -d ${machinistHome}/worker/runs/${machinistRunId}/lease_* 2>/dev/null | head -1`]);
   const dir = r.stdout.trim();
+// Machinist records one total per run in result.json: input + cache creation + cache read +
+// output tokens, as the executor reported them. It does not keep the split.
   if (!dir) return undefined;
   try {
-    const result = JSON.parse(readFileSync(`${dir}/result.json`, "utf8"));
-    const u = result.token_usage ?? result.usage ?? result.tokens;
-    if (!u || typeof u !== "object") return undefined;
-    const num = (x) => (typeof x === "number" ? x : undefined);
-    const input = num(u.input_tokens ?? u.input ?? u.prompt_tokens);
-    const output = num(u.output_tokens ?? u.output ?? u.completion_tokens);
-    if (input === undefined || output === undefined) return undefined;
-    const cacheRead = num(u.cache_read_input_tokens ?? u.cache_read);
-    const cacheWrite = num(u.cache_creation_input_tokens ?? u.cache_write);
-    return { input, output, ...(cacheRead === undefined ? {} : { cacheRead }), ...(cacheWrite === undefined ? {} : { cacheWrite }) };
+    const total = JSON.parse(readFileSync(`${dir}/result.json`, "utf8")).token_usage;
+    return typeof total === "number" ? total : undefined;
   } catch {
     return undefined;
   }
@@ -204,7 +198,7 @@ async function reconcileRuns() {
         ...(resultLine ? { resultLine } : {}),
         ...(sha ? { headSha: sha } : {}),
         ...(pr === undefined ? {} : { pr }),
-        ...(tokenUsage ? { tokenUsage } : {}),
+        ...(tokenUsage === undefined ? {} : { tokenUsage }),
       });
       tracked.delete(runId);
       log("complete", state, `run=${runId} job=${jobId}${pr ? ` pr=${pr}` : ""}`);
