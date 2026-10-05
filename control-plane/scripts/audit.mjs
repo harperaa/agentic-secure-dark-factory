@@ -83,9 +83,18 @@ for (const [name, v] of Object.entries(vulns)) {
   }
 }
 
+// A real calendar date, YYYY-MM-DD. A string that merely looks like one (9999-99-99) would sort
+// after today and never come due, so an entry with no valid date is rejected outright.
+const validDate = (s) => {
+  if (typeof s !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const d = new Date(`${s}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+};
 for (const e of allowlist) {
   if (!seen.has(e.id)) failures.push(`${e.id} (${e.package}) is no longer reported: remove it from audit-allowlist.json`);
-  if (e.reviewBy < today) failures.push(`${e.id} (${e.package}) review was due ${e.reviewBy}: re-check for a fix, then extend reviewBy or remove the entry`);
+  if (typeof e.reason !== "string" || e.reason.trim() === "") failures.push(`${e.id} (${e.package}) has no reason: say why it is accepted`);
+  if (!validDate(e.reviewBy)) failures.push(`${e.id} (${e.package}) has no valid reviewBy date (YYYY-MM-DD): ${JSON.stringify(e.reviewBy ?? null)}`);
+  else if (e.reviewBy < today) failures.push(`${e.id} (${e.package}) review was due ${e.reviewBy}: re-check for a fix, then extend reviewBy or remove the entry`);
 }
 
 for (const e of allowlist) {
