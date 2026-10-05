@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// factory-managed: written by the factory's genesis (apply-generated.sh); edits here are overwritten.
 // `npm audit --audit-level=high` with an allowlist that cannot go stale.
 //
 // npm audit has no way to accept one advisory, so an advisory with no patched release fails
@@ -9,9 +10,9 @@
 //   - an allowlisted entry is past its reviewBy date (the review is overdue);
 //   - an allowlisted advisory now has a non-breaking fix (take it, and drop the entry);
 //   - an allowlisted advisory is no longer reported at all (drop the entry).
-// The weekly allowlist-review routine does the same checks ahead of time and opens the PR.
+// Only the operator edits audit-allowlist.json (see AGENTS.md); agents stop with needs-human.
 //
-// Usage: node scripts/audit.mjs [--today=YYYY-MM-DD]   (run from control-plane/)
+// Usage: node scripts/audit.mjs [--today=YYYY-MM-DD]   (run from the repository root)
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 

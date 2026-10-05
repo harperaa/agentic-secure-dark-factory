@@ -42,6 +42,8 @@ make_template() {
   printf '{"lockfileVersion":3}\n' > "$dir/package-lock.json"
   printf '{"$schema":"https://openapi.vercel.sh/vercel.json","framework":"nextjs","buildCommand":"node scripts/modules.mjs install --all --apply-edits && node scripts/vercel-prebuild.mjs && npm run build"}\n' > "$dir/vercel.json"
   printf 'node_modules/\n.env.local\n.vercel/\n' > "$dir/.gitignore"
+  mkdir -p "$dir/.github/workflows"
+  printf 'name: CI\njobs:\n  security:\n    steps:\n      - run: npm ci\n      - run: npm audit --audit-level=high\n      - run: npm ls --all > /dev/null\n' > "$dir/.github/workflows/ci.yml"
   printf '#!/usr/bin/env bash\nprintf "lockdown %%s\\n" "$*" >> "${FAKE_LOG:-/dev/null}"\nprintf "Applying branch protection to %%s:main\\n" "${GH_REPO:-unknown}"\n' > "$dir/scripts/lockdown-main.sh"
   chmod +x "$dir/scripts/lockdown-main.sh"
   : > "$dir/scripts/setup.mjs"; : > "$dir/scripts/deploy.mjs"; : > "$dir/scripts/modules.mjs"

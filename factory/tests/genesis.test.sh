@@ -41,6 +41,8 @@ GENERATED .secrets.baseline passed
 GENERATED .github/workflows/factory-security.yml passed
 GENERATED AGENTS.md passed
 GENESIS generated-files passed
+GENESIS audit-allowlist started
+GENESIS audit-allowlist passed
 GENESIS secrets-baseline started
 GENESIS secrets-baseline passed
 GENESIS github-setup started
@@ -67,11 +69,17 @@ GENESIS lockdown started
 PROTECT required-checks passed
 GENESIS lockdown passed"
 assert_eq "$(genesis_steps "$out" | grep -v '^GENERATED' ; true)" "$(printf '%s\n' "$expected_fresh" | grep -v '^GENERATED')" "fresh run emits the golden step sequence"
-assert_eq "$(genesis_steps "$out" | grep -c '^GENERATED .* passed')" 6 "six factory-owned files are written"
+assert_eq "$(genesis_steps "$out" | grep -c '^GENERATED .* passed')" 8 "eight factory-owned files are written"
 assert_contains "$out" "RESULT status=ready repo=fixture-owner/g1 repo_url=https://github.com/fixture-owner/g1 url=https://fake-product.vercel.app sandbox=local" "RESULT line is unchanged"
 assert_contains "$out" '"claimUrl": "https://dashboard.clerk.com/apps/claim?token=fake"' "init output with the claim URL is in the run record"
 prod="$FACTORY_WORKSPACE/g1"
 assert_file "$prod/AGENTS.md" "AGENTS.md generated into the product"
+assert_file "$prod/scripts/audit.mjs" "audit script generated into the product"
+assert_eq "$(cat "$prod/audit-allowlist.json")" "[]" "the product starts with an empty allowlist"
+assert_contains "$(cat "$prod/.github/workflows/ci.yml")" "- run: node scripts/audit.mjs" "ci.yml's npm audit step runs through the allowlist"
+assert_not_contains "$(cat "$prod/.github/workflows/ci.yml")" "npm audit --audit-level=high" "the bare npm audit step is gone"
+assert_contains "$(cat "$prod/.github/workflows/ci.yml")" "npm ls --all" "the rest of the security job is untouched"
+printf '[{"id":"GHSA-test"}]\n' > "$prod/audit-allowlist.json"
 assert_file "$prod/docs/DEPLOYMENT-DEV.md" "deployment summary written"
 assert_contains "$(head -n 1 "$prod/docs/DEPLOYMENT-DEV.md")" "# Dev Deployment Summary" "deployment summary header"
 assert_eq "$(jq -r .buildCommand "$prod/vercel.json")" "node scripts/vercel-prebuild.mjs && npm run build" "product vercel.json is the Doppler-mode build"
@@ -97,6 +105,7 @@ GENESIS configure passed
 GENESIS doppler-sync skipped
 GENESIS generated-files started
 GENESIS generated-files passed
+GENESIS audit-allowlist skipped
 GENESIS secrets-baseline started
 GENESIS secrets-baseline passed
 GENESIS github-setup skipped
@@ -121,6 +130,7 @@ GENESIS lockdown passed"
 assert_eq "$(genesis_steps "$out" | grep -v '^GENERATED'; true)" "$expected_rerun" "re-run skips every completed step"
 assert_contains "$out" "RESULT status=ready repo=fixture-owner/g1" "re-run still reports the RESULT line"
 assert_not_contains "$out" "clerk_claim_url=" "re-run keeps the claim URL out of the RESULT line (it stays in the broker)"
+assert_contains "$(cat "$prod/audit-allowlist.json")" "GHSA-test" "the operator's allowlist survives a re-run (write-once)"
 
 # --- failures stop the stage --------------------------------------------------------------
 reset_stores
