@@ -103,7 +103,13 @@ export function AdvancedSpecForm({
   const [busy, setBusy] = useState(false);
 
   function buildSpec() {
+    // Start from the handed-off draft, then write the form's fields over it. The form has no
+    // control for every optional field a chat draft can carry (providers.secrets, providers.review,
+    // the assessment and release policy), and a hand-off that dropped them would save a different
+    // document from the one the operator reviewed in Chat. Ajv still decides on the result.
+    const initialProviders = (initial?.providers ?? {}) as Record<string, unknown>;
     return {
+      ...(initial ?? {}),
       spec_version: 0,
       name: name.trim(),
       pitch: pitch.trim(),
@@ -121,7 +127,7 @@ export function AdvancedSpecForm({
       greptile_threshold: threshold,
       max_repair_rounds: rounds,
       forced_gray_paths: csv(forcedGray),
-      providers: { profile, sandbox },
+      providers: { ...initialProviders, profile, sandbox },
     };
   }
 

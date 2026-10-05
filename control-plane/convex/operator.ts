@@ -1,5 +1,17 @@
-import { query } from "./_generated/server";
+import { internalQuery, query } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
+import { requireOperator } from "./lib/factoryAuth";
+
+/**
+ * The operator gate, for actions. An action has no ctx.db and requireOperator reads the users
+ * table, so an action asks a query to do the check; runQuery carries the caller's identity.
+ */
+export const assertOperator = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    await requireOperator(ctx);
+  },
+});
 
 /**
  * Spec defaults for the signed-in operator (design §4.12).

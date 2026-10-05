@@ -42,6 +42,9 @@ for (const { name, command, args } of children) {
   child.on('error', (err) => {
     process.stderr.write(`[dev] ${name} failed to start: ${err.message}\n`);
     exitCode = 1;
+    // A child that never spawned emits no 'exit', so it would stay in `running` and hold the
+    // terminal open forever; forget it here so the failure returns to the shell.
+    running.delete(name);
     stopAll();
   });
 

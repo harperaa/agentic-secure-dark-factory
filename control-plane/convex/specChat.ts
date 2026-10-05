@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import Ajv2020 from "ajv/dist/2020";
 import addFormats from "ajv-formats";
 import { action } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import schema from "../lib/factory/factory-spec.schema.json";
 
@@ -188,7 +189,12 @@ export const draft = action({
     /** What this operator's last spec used, so the chat stops asking for it every time. */
     defaults: v.optional(v.object({ admin_email: v.string(), github_owner: v.string() })),
   },
-  handler: async (_ctx, { messages, current, defaults }) => {
+  handler: async (ctx, { messages, current, defaults }) => {
+    // Every turn is a billed Anthropic request on the deployment's key. The same gate as the
+    // rest of the factory UI, and before anything else: an anonymous caller learns nothing, not
+    // even whether the key is configured.
+    await ctx.runQuery(internal.operator.assertOperator, {});
+
     if (!process.env.ANTHROPIC_API_KEY) {
       return {
         reply:

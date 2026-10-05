@@ -71,20 +71,21 @@ export default function NewSpecPage() {
         </button>
       </div>
 
-      {tab === "chat" ? (
-        <div role="tabpanel" id="spec-panel-chat" aria-labelledby="spec-tab-chat">
-          <SpecChat onHandOff={openInAdvanced} />
-        </div>
-      ) : (
-        <div
-          role="tabpanel"
-          id="spec-panel-advanced"
-          aria-labelledby="spec-tab-advanced"
-          className="max-w-[72ch]"
-        >
-          <AdvancedSpecForm key={`${handOffCount}:${defaults ? "ready" : "loading"}`} initial={handOff} {...(defaults ? { defaults } : {})} />
-        </div>
-      )}
+      {/* Both panels stay mounted; the inactive one is hidden, not unmounted. A tab switch must
+          not cost the operator their conversation or their unsaved form edits: after "Open in
+          Advanced" they go back to the chat to refine the draft and expect to find it there. */}
+      <div role="tabpanel" id="spec-panel-chat" aria-labelledby="spec-tab-chat" hidden={tab !== "chat"}>
+        <SpecChat onHandOff={openInAdvanced} />
+      </div>
+      <div
+        role="tabpanel"
+        id="spec-panel-advanced"
+        aria-labelledby="spec-tab-advanced"
+        className="max-w-[72ch]"
+        hidden={tab !== "advanced"}
+      >
+        <AdvancedSpecForm key={`${handOffCount}:${defaults ? "ready" : "loading"}`} initial={handOff} {...(defaults ? { defaults } : {})} />
+      </div>
     </div>
   );
 }
