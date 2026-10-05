@@ -10,6 +10,8 @@
   "scripts": {
     "dev": "next dev",
     "dev:doppler": "doppler run -- next dev",
+    "dev:all": "node scripts/dev.mjs",
+    "dev:all:doppler": "doppler run -- node scripts/dev.mjs",
     "convex": "npx convex dev",
     "convex:doppler": "doppler run -- npx convex dev",
     "build": "next build",
@@ -27,6 +29,7 @@
     "validate-spec": "node scripts/validate-spec.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
     "@clerk/backend": "^2.4.1",
     "@clerk/nextjs": "^6.39.6",
     "@clerk/themes": "^2.2.55",

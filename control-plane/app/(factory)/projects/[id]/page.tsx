@@ -114,7 +114,7 @@ export default function ProjectPage() {
               <Field label="Elapsed">{elapsed(latest.startedAt ?? latest.queuedAt, latest.completedAt ?? now)}</Field>
               <Field label="Exit code">{latest.exitCode ?? "—"}</Field>
               <Field label="Tokens">
-                {latest.tokenUsage ? `${latest.tokenUsage.input.toLocaleString()} in / ${latest.tokenUsage.output.toLocaleString()} out` : "—"}
+                {latest.tokenUsage?.toLocaleString() ?? "—"}
               </Field>
               {latest.resultLine && (
                 <div className="sm:col-span-2">

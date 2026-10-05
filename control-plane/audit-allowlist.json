@@ -1,0 +1,9 @@
+[
+  {
+    "id": "GHSA-vfj7-8cjw-p6xm",
+    "package": "braces",
+    "reason": "Stack exhaustion on deeply nested glob patterns. Reached only through eslint-config-next -> @next/eslint-plugin-next -> fast-glob -> micromatch: a lint-time dev dependency, never in the deployed control plane or on the factory path. No patched release exists (latest is 3.0.3, the advisory covers <= 3.0.3).",
+    "added": "2026-10-05",
+    "reviewBy": "2026-11-05"
+  }
+]

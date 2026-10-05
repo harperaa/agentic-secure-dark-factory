@@ -7,8 +7,8 @@ starts by parsing that text as an argument string.
 | Command | File | Executor | What the submitted prompt contains |
 |---|---|---|---|
 | `genesis` | none (script executor, see `factory/scripts/genesis.sh`) | `genesis-script` | the `factory-spec.json` document |
-| `foreman` | Machinist's own `examples/prompts/foreman.md`, copied at install time | `claude` or `codex` | one issue reference |
-| `shepherd` | Machinist's own `examples/prompts/shepherd.md`, copied at install time | `codex` or `claude` | `max_actions=<n>` schedule request |
+| `foreman` | Machinist's own `examples/prompts/foreman.md` at `MACHINIST_PROMPTS_REF`, copied at install time | `claude` or `codex` | one issue reference |
+| `shepherd` | Machinist's own `examples/prompts/shepherd.md` at `MACHINIST_PROMPTS_REF`, copied at install time | `codex` or `claude` | `max_actions=<n>` schedule request |
 | `assess` | `assess.md` | `claude` | `--mode=fresh\|reassessment\|auto --deepsec=on\|off\|auto --baseline=<path> --max-new-medium=<n>` |
 | `greptile-fix` | `greptile-fix.md` | `claude` or `codex` | `--pr=<url> --round=<n> --threshold=<0-5>` |
 | `triage` | `triage.md` | `claude` | `--ref=<issue or PR url> --mode=dark\|gray --forced-gray-paths=<csv globs>` |
