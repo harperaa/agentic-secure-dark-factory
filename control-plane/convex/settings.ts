@@ -1,4 +1,5 @@
 import { mutation, query } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { modeValidator } from "./factoryTables";
 import { requireOperator } from "./lib/factoryAuth";
@@ -67,13 +68,10 @@ export const update = mutation({
     // auto-merge label is cancelled, and one already on a pull request is taken off, so the
     // shepherd -- which merges only labelled PRs -- stands down. The gate re-evaluates later and
     // opens a decision instead.
-    // Branch protection follows the effective mode; re-apply it wherever this flip changed it.
+    // Branch protection follows the effective mode; re-apply it wherever this flip changed it,
+    // a page of projects at a time so the operator's mutation stays small whatever the factory's size.
     if (before.mode !== settings.mode) {
-      for (const p of await ctx.db.query("projects").collect()) {
-        if (p.repo && effectiveMode(before.mode, p.mode) !== effectiveMode(settings.mode, p.mode)) {
-          await ctx.db.insert("effects", { projectId: p._id, kind: "protect", args: { repo: p.repo, name: p.name, mode: effectiveMode(settings.mode, p.mode), providers: p.providers }, status: "queued", createdAt: now });
-        }
-      }
+      await ctx.scheduler.runAfter(0, internal.projects.reprotect, { beforeMode: before.mode, afterMode: settings.mode, cursor: null });
     }
     if (before.mode !== "gray" && settings.mode === "gray") {
       const queued = await ctx.db.query("effects").filter((q) => q.eq(q.field("status"), "queued")).collect();

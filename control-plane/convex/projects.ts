@@ -1,5 +1,6 @@
-import { mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import { requireOperator } from "./lib/factoryAuth";
 import { rememberSpecDefaults } from "./operator";
 import { modeValidator, providerProfileValidator } from "./factoryTables";
@@ -154,8 +155,11 @@ export const setMode = mutation({
     // GitHub's rules must follow the mode the control plane acts on. calorie-ledger was drafted
     // gray (team lockdown, one review), switched to dark later, and the shepherd then could not
     // merge: nobody can approve their own pull request. Re-apply protection for the new mode.
-    if (project.repo) {
-      const factory = await readFactorySettings(ctx);
+    // Only when the mode the project runs in actually changed: under factory gray every project
+    // is gray whatever its own setting says. A project with no repository yet is reconciled when
+    // genesis completes (stateMachine.onRunCompleted), against the mode genesis locked down with.
+    const factory = await readFactorySettings(ctx);
+    if (project.repo && effectiveMode(factory.mode, project.mode) !== effectiveMode(factory.mode, mode)) {
       await ctx.db.insert("effects", {
         projectId,
         kind: "protect",
@@ -163,6 +167,27 @@ export const setMode = mutation({
         status: "queued",
         createdAt: now,
       });
+    }
+  },
+});
+
+/**
+ * After a factory-wide mode flip, queue a `protect` effect for every project whose effective mode
+ * changed, one page at a time: each call handles PAGE projects and schedules the next page.
+ */
+const PAGE = 25;
+export const reprotect = internalMutation({
+  args: { beforeMode: modeValidator, afterMode: modeValidator, cursor: v.union(v.string(), v.null()) },
+  handler: async (ctx, { beforeMode, afterMode, cursor }) => {
+    const { page, isDone, continueCursor } = await ctx.db.query("projects").paginate({ numItems: PAGE, cursor });
+    const now = Date.now();
+    for (const p of page) {
+      if (p.repo && effectiveMode(beforeMode, p.mode) !== effectiveMode(afterMode, p.mode)) {
+        await ctx.db.insert("effects", { projectId: p._id, kind: "protect", args: { repo: p.repo, name: p.name, mode: effectiveMode(afterMode, p.mode), providers: p.providers }, status: "queued", createdAt: now });
+      }
+    }
+    if (!isDone) {
+      await ctx.scheduler.runAfter(0, internal.projects.reprotect, { beforeMode, afterMode, cursor: continueCursor });
     }
   },
 });
