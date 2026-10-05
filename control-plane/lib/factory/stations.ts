@@ -5,7 +5,6 @@ export type StationState = "idle" | "done" | "running" | "hold" | "stop";
 export type Station = {
   key: string;
   label: string;
-  short: string;
   state: StationState;
   /** The one number that matters at this station, if any. */
   figure?: string;
@@ -19,15 +18,15 @@ export function stationsFor(
   opts: { reviewScore?: number | null; lastRunStage?: Doc<"runs">["stage"] } = {},
 ): Station[] {
   const phases = ((project.spec as ProjectSpec).phases ?? []).length || 1;
-  const keys: Array<{ key: string; label: string; short: string }> = [
-    { key: "genesis", label: "Genesis", short: "G" },
-    ...Array.from({ length: phases }, (_, i) => ({ key: `build-${i}`, label: `Build ${i + 1}`, short: `B${i + 1}` })),
-    { key: "assess", label: "Assess", short: "A" },
-    { key: "fix", label: "Fix", short: "F" },
-    { key: "review", label: "Review", short: "R" },
-    { key: "deploy", label: "Deploy", short: "D" },
-    { key: "handoff", label: "Handoff", short: "H" },
-    { key: "maintain", label: "Maintain", short: "M" },
+  const keys: Array<{ key: string; label: string }> = [
+    { key: "genesis", label: "Genesis" },
+    ...Array.from({ length: phases }, (_, i) => ({ key: `build-${i}`, label: `Build ${i + 1}` })),
+    { key: "assess", label: "Assess" },
+    { key: "fix", label: "Fix" },
+    { key: "review", label: "Review" },
+    { key: "deploy", label: "Deploy" },
+    { key: "handoff", label: "Handoff" },
+    { key: "maintain", label: "Maintain" },
   ];
   const stage = project.stage === "NEEDS_HUMAN" ? (opts.lastRunStage ?? "GENESIS") : project.stage;
   const currentKey: string | null =
