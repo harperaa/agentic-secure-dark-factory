@@ -21,6 +21,6 @@ v0.4.0 with no newer release. Re-check before every `MACHINIST_VERSION` bump.
 | `foreman.md` and `shepherd.md` removed from `examples/prompts` (#488) | fetched at `MACHINIST_PROMPTS_REF`, pinned apart from the binary |
 | `[shepherd]` schedules removed (#448) | none: the factory never configured them |
 | Task workflows, review gates, artifacts (#492) | none: additive; command jobs (`POST /api/v1/jobs` with `command`) unchanged |
-| `final_message` in `result.json` (#497) | available to the bridge as a run summary once bumped |
+| `final_message` in `result.json` (#497) | not read yet: after the bump, bridge work to show it as the run summary instead of scraping output |
 | Worker survives a stale-completion 409 (#454, issue #443); completion retries (#444) | wanted: a lease lost on a long foreman run stops the v0.4.0 worker |
 | `Runtime` seam (#480) | still open, no upstream response |

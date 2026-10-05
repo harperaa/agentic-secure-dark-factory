@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Fake `curl` for contract tests: records the URL, writes a placeholder to -o, never touches the
+# network. FAKE_FAIL=curl makes every request fail the way a 404 does under -f.
+set -euo pipefail
+url=""; out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift ;;
+    http://*|https://*) url="$1" ;;
+  esac
+  shift
+done
+printf 'curl %s\n' "$url" >> "${FAKE_LOG:-/dev/null}"
+if [ "${FAKE_FAIL:-}" = "curl" ]; then
+  printf 'curl: (22) The requested URL returned error: 404\n' >&2
+  exit 22
+fi
+body="# fake download of $url"
+if [ -n "$out" ]; then printf '%s\n' "$body" > "$out"; else printf '%s\n' "$body"; fi
