@@ -6,12 +6,16 @@
 //
 // Env: CONVEX_URL (deployment URL), FACTORY_BRIDGE_SECRET, MACHINIST_URL, MACHINIST_TOKEN_FILE,
 //      FACTORY_ROOT, MACHINIST_HOME, BRIDGE_POLL_MS (optional).
+//      Local dev servers: FACTORY_WORKSPACE, LOCAL_SERVERS (on|off, default on),
+//      LOCAL_SERVERS_MAX (default 0 = no limit), LOCAL_SERVERS_PORT_BASE (default 3100).
 import { ConvexHttpClient } from "convex/browser";
 import { anyApi } from "convex/server";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import path from "node:path";
+import { createLocalServers } from "./local-servers.mjs";
+import { cooldownVerdict, registryPublishedAt } from "./dependency-cooldown.mjs";
 
 const required = ["CONVEX_URL", "FACTORY_BRIDGE_SECRET", "MACHINIST_URL", "MACHINIST_TOKEN_FILE", "FACTORY_ROOT", "MACHINIST_HOME"];
 for (const name of required) {
@@ -59,11 +63,11 @@ async function submitRun(run) {
   log("submit", "passed", `run=${run._id} job=${id} command=${run.command}`);
 }
 
+// Machinist records one total per run in result.json: input + cache creation + cache read +
+// output tokens, as the executor reported them. It does not keep the split.
 function readTokenUsage(machinistRunId) {
   const r = sh("bash", ["-c", `ls -d ${machinistHome}/worker/runs/${machinistRunId}/lease_* 2>/dev/null | head -1`]);
   const dir = r.stdout.trim();
-// Machinist records one total per run in result.json: input + cache creation + cache read +
-// output tokens, as the executor reported them. It does not keep the split.
   if (!dir) return undefined;
   try {
     const total = JSON.parse(readFileSync(`${dir}/result.json`, "utf8")).token_usage;
@@ -82,15 +86,29 @@ function readEvents(machinistRunId) {
   return j.stdout;
 }
 
-// The foreman records its PR in the issue's state comment; that is authoritative, the output is not
-// (it also lists other open PRs while taking inventory).
-function prFromForemanState(ref) {
+// The foreman records its PR on the issue; that is authoritative, the output is not (it also
+// lists other open PRs while taking inventory -- which is how a Dependabot PR once became a
+// phase's PR). Machinist has written it three ways: a `**Pull request:** <url>` line, a
+// `| Pull request | <url> (open...) |` row in the foreman-state comment, and a separate
+// `machinist:foreman-pr` comment. The newest match across those comments wins. Failing all of
+// them, an open PR that GitHub says closes the issue is the next best evidence; failing that too,
+// the PR the output named counts only if its branch carries the issue number the way the foreman
+// names branches (codex/<issue>-<slug>), because the output also lists the PRs it inventoried.
+const FOREMAN_PR = /(?:\*\*Pull request:\*\*|\|\s*Pull request\s*\||Pull request for this issue:)\s*https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/(\d+)/g;
+function prFromForemanState(ref, candidate) {
   const m = ref?.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/(\d+)$/);
   if (!m) return undefined;
-  const r = sh("gh", ["api", `repos/${m[1]}/issues/${m[2]}/comments`, "--paginate", "--jq", '.[] | select(.body | contains("machinist:foreman-state")) | .body']);
-  if (!r.ok) return undefined;
-  const pr = [...r.stdout.matchAll(/\*\*Pull request:\*\*\s*(https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/(\d+))/g)].pop();
-  return pr ? Number(pr[2]) : undefined;
+  const r = sh("gh", ["api", `repos/${m[1]}/issues/${m[2]}/comments`, "--paginate", "--jq", '.[] | select(.body | test("machinist:foreman-(state|pr)")) | .body']);
+  const pr = r.ok ? [...r.stdout.matchAll(FOREMAN_PR)].pop() : undefined;
+  if (pr) return Number(pr[1]);
+  const closing = sh("gh", ["pr", "list", "--repo", m[1], "--state", "open", "--json", "number,closingIssuesReferences", "--jq", `[.[] | select(any(.closingIssuesReferences[]; .number == ${Number(m[2])})) | .number] | max // empty`]);
+  const n = closing.ok ? Number(closing.stdout.trim()) : NaN;
+  if (Number.isInteger(n) && n > 0) return n;
+  if (candidate !== undefined) {
+    const branch = sh("gh", ["pr", "view", String(candidate), "--repo", m[1], "--json", "headRefName", "--jq", ".headRefName"]);
+    if (branch.ok && new RegExp(`(^|[^0-9])${Number(m[2])}([^0-9]|$)`).test(branch.stdout.trim())) return candidate;
+  }
+  return undefined;
 }
 
 // Executors narrate themselves one line at a time: `GENESIS step=clone outcome=passed`, from
@@ -186,7 +204,9 @@ async function reconcileRuns() {
       const parsed = parseOutput(out);
       const resultLine = parsed.resultLine, sha = parsed.sha;
       const run = await convex.query(api.bridge.runById, { secret, runId }).catch(() => null);
-      const pr = (run?.command === "foreman" ? prFromForemanState(run.ref) : undefined) ?? parsed.pr;
+      // A foreman's PR comes from the issue; its output names every open PR it inventoried, so
+      // the last URL there is only a candidate, accepted when its branch names the issue.
+      const pr = run?.command === "foreman" ? prFromForemanState(run.ref, parsed.pr) : parsed.pr;
       const tokenUsage = mrun ? readTokenUsage(mrun.id) : undefined;
       const state = job.state === "succeeded" ? "succeeded" : job.state === "cancelled" ? "cancelled" : job.state === "timed_out" ? "timed_out" : "failed";
       await convex.mutation(api.bridge.complete, {
@@ -273,17 +293,46 @@ async function runEffect(effect) {
 
 // --- gate sync (webhook-independent view of CI and reviewer state) ---------------------------
 let lastGateSync = 0;
+
+// Lockfile cooldown per PR head: only recomputed when the head moves, because it fetches both
+// lockfiles and a packument for every new package.
+const cooldownByHead = new Map();
+const publishedAt = registryPublishedAt();
+const LOCKFILES = new Set(["package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock"]);
+async function dependencyCooldown(repo, view) {
+  const changed = (view.files ?? []).map((f) => f.path).filter((p) => LOCKFILES.has(p.split("/").pop()));
+  if (changed.length === 0 || !view.headRefOid) return undefined;
+  const key = `${repo}@${view.headRefOid}`;
+  if (cooldownByHead.has(key)) return cooldownByHead.get(key);
+  let verdict;
+  if (changed.some((p) => !/(^|\/)package(-lock)?\.json$/.test(p))) {
+    verdict = { ok: false, checked: 0, violations: [`only package-lock.json can be checked; this PR changes ${changed.join(", ")}`] };
+  } else if (changed.some((p) => p.includes("/"))) {
+    verdict = { ok: false, checked: 0, violations: [`only the root lockfile is checked; this PR changes ${changed.join(", ")}`] };
+  } else {
+    const read = (ref) => {
+      const r = sh("gh", ["api", `repos/${repo}/contents/package-lock.json?ref=${ref}`, "-H", "Accept: application/vnd.github.raw"]);
+      return r.ok ? JSON.parse(r.stdout) : null;
+    };
+    const base = read(view.baseRefName ?? "main"), head = read(view.headRefOid);
+    verdict = base && head ? await cooldownVerdict(base, head, publishedAt) : { ok: false, checked: 0, violations: ["could not read package-lock.json from the base or the head"] };
+  }
+  cooldownByHead.set(key, verdict);
+  log("dependency-cooldown", verdict.ok ? "passed" : "failed", `repo=${repo} head=${view.headRefOid.slice(0, 8)} checked=${verdict.checked} violations=${verdict.violations.length}`);
+  return verdict;
+}
 async function syncGates() {
   if (Date.now() - lastGateSync < Number(process.env.BRIDGE_GATE_SYNC_MS ?? 60_000)) return;
   lastGateSync = Date.now();
   const targets = await convex.query(api.bridge.reviewTargets, { secret });
   for (const t of targets) {
-    const checks = sh("gh", ["pr", "checks", String(t.pr), "--repo", t.repo, "--json", "name,bucket"]);
+    const checks = sh("gh", ["pr", "checks", String(t.pr), "--repo", t.repo, "--json", "name,bucket,link"]);
     const req = sh("gh", ["api", `repos/${t.repo}/branches/main/protection/required_status_checks`, "--jq", ".contexts[]"]);
     const required = new Set(req.ok ? req.stdout.split("\n").filter(Boolean) : []);
-    const ci = checks.ok ? JSON.parse(checks.stdout || "[]").map((c) => ({ name: c.name, conclusion: c.bucket === "pass" ? "success" : c.bucket === "fail" ? "failure" : c.bucket === "skipping" ? "skipped" : "pending", required: required.has(c.name) })) : [];
-    const view = sh("gh", ["pr", "view", String(t.pr), "--repo", t.repo, "--json", "headRefOid,files,labels"]);
+    const ci = checks.ok ? JSON.parse(checks.stdout || "[]").map((c) => ({ name: c.name, conclusion: c.bucket === "pass" ? "success" : c.bucket === "fail" ? "failure" : c.bucket === "skipping" ? "skipped" : "pending", required: required.has(c.name), ...(c.link ? { url: c.link } : {}) })) : [];
+    const view = sh("gh", ["pr", "view", String(t.pr), "--repo", t.repo, "--json", "headRefOid,baseRefName,files,labels"]);
     const v = view.ok ? JSON.parse(view.stdout) : {};
+    const cooldown = await dependencyCooldown(t.repo, v);
     const score = sh(path.join(factoryRoot, "factory/scripts/greptile-score.sh"), [t.repo, String(t.pr)]);
     const sc = score.ok ? JSON.parse(score.stdout) : { score: null, comments: [], unresolved: 0, scored_at: null };
     // Greptile reviews on push, but not always; when the newest score predates the head commit, ask once per head.
@@ -306,14 +355,22 @@ async function syncGates() {
       ...(v.headRefOid ? { headSha: v.headRefOid } : {}),
       ci,
       reviewScore: stale ? null : (sc.score ?? null),
+      ...(!stale && sc.summary ? { reviewSummary: sc.summary } : {}),
       unresolvedComments: typeof sc.unresolved === "number" ? sc.unresolved : (sc.comments ?? []).filter((c) => !c.in_reply_to_id).length,
       changedPaths: (v.files ?? []).map((f) => f.path),
       labels: (v.labels ?? []).map((l) => l.name),
+      ...(cooldown ? { dependencyCooldown: { ok: cooldown.ok, checked: cooldown.checked, violations: cooldown.violations.slice(0, 50) } } : {}),
       ...(reviewRequestedHead ? { reviewRequestedHead } : {}),
     });
     log("gate-sync", "passed", `repo=${t.repo} pr=${t.pr} ci=${ci.length} required=${ci.filter((c) => c.required).length} score=${stale ? "stale" : (sc.score ?? "none")} unresolved=${typeof sc.unresolved === "number" ? sc.unresolved : "?"}`);
   }
 }
+
+// --- local dev servers (see local-servers.mjs) ----------------------------------------------
+const superviseLocal =
+  process.env.LOCAL_SERVERS !== "off" && process.env.FACTORY_WORKSPACE
+    ? createLocalServers({ convex, api, secret, machinistHome, workspace: expand(process.env.FACTORY_WORKSPACE), log })
+    : async () => {};
 
 // --- loop -----------------------------------------------------------------------------------
 async function tick() {
@@ -329,6 +386,7 @@ async function tick() {
   for (const effect of effects) await runEffect(effect);
   await reconcileRuns();
   await syncGates();
+  await superviseLocal();
 }
 
 log("start", "passed", `convex=${process.env.CONVEX_URL} machinist=${machinistUrl} poll_ms=${pollMs}`);

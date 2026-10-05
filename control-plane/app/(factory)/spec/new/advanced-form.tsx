@@ -10,6 +10,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import schema from "@/lib/factory/factory-spec.schema.json";
 import { PROFILE_DEFAULTS, PROVIDER_KINDS, capabilityNote } from "@/lib/factory/capabilities";
 import { errorCopy } from "@/lib/factory/copy";
+import type { SpecPolicyDefaults } from "@/convex/operator";
 import { ButtonPrimary, ButtonSecondary, Panel } from "../../_components/panel";
 
 type Phase = { title: string; description: string; acceptance: string; touches: string };
@@ -74,7 +75,7 @@ export function AdvancedSpecForm({
 }: {
   initial?: SpecDoc;
   /** Remembered from this operator's last spec; `initial` (a chat draft) wins over it. */
-  defaults?: { admin_email: string; github_owner: string };
+  defaults?: { admin_email: string; github_owner: string; policy?: SpecPolicyDefaults };
 }) {
   const router = useRouter();
   const createFromSpec = useMutation(api.projects.createFromSpec);
@@ -93,10 +94,10 @@ export function AdvancedSpecForm({
   const [secretsMode, setSecretsMode] = useState<"doppler" | "env">(() => (str(initial, "secrets_mode", "doppler") === "env" ? "env" : "doppler"));
   const [phases, setPhases] = useState<Phase[]>(() => phasesFrom(initial));
   const [mode, setMode] = useState<"gray" | "dark">(() => (str(initial, "mode", "gray") === "dark" ? "dark" : "gray"));
-  const [threshold, setThreshold] = useState(() => num(initial, "greptile_threshold", 5));
-  const [rounds, setRounds] = useState(() => num(initial, "max_repair_rounds", 4));
-  const [forcedGray, setForcedGray] = useState(() => list(initial, "forced_gray_paths", "middleware.ts, convex/auth*, app/api/**, lib/security/**, package.json, package-lock.json"));
-  const [profile, setProfile] = useState<"default" | "eu">(() => ((initial?.providers ?? {}) as Record<string, unknown>).profile === "eu" ? "eu" : "default");
+  const [threshold, setThreshold] = useState(() => num(initial, "greptile_threshold", defaults?.policy?.greptile_threshold ?? 5));
+  const [rounds, setRounds] = useState(() => num(initial, "max_repair_rounds", defaults?.policy?.max_repair_rounds ?? 4));
+  const [forcedGray, setForcedGray] = useState(() => list(initial, "forced_gray_paths", defaults?.policy?.forced_gray_paths.join(", ") ?? "middleware.ts, convex/auth*, app/api/**, lib/security/**, package.json, package-lock.json"));
+  const [profile, setProfile] = useState<"default" | "eu">(() => { const p = ((initial?.providers ?? {}) as Record<string, unknown>).profile; return p === "eu" || p === "default" ? p : (defaults?.policy?.profile ?? "default"); });
   const [sandbox, setSandbox] = useState(() => { const s = ((initial?.providers ?? {}) as Record<string, unknown>).sandbox; return typeof s === "string" ? s : "local"; });
   const [errors, setErrors] = useState<string[]>([]);
   const [created, setCreated] = useState<Id<"projects"> | null>(null);

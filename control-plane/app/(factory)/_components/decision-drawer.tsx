@@ -69,6 +69,18 @@ function DecisionBody({ item, onDone }: { item: DecisionItem; onDone: () => void
 
   return (
     <div className="flex flex-col gap-4">
+      {item.decision.detail && item.decision.detail.length > 0 && (
+        <div>
+          <h3 className="text-[length:var(--text-12)] text-ink-muted">What is blocking</h3>
+          <ul role="list" className="mt-1 flex list-disc flex-col gap-1 pl-4 text-[length:var(--text-14)]">
+            {item.decision.detail.map((line, i) => (
+              <li key={i} className="break-words">
+                {line}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {item.decision.evidence.length > 0 && (
         <div>
           <h3 className="text-[length:var(--text-12)] text-ink-muted">Evidence</h3>

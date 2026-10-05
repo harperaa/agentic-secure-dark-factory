@@ -10,6 +10,7 @@ import { errorCopy, runStateCopy, stageCopy } from "@/lib/factory/copy";
 import { elapsed } from "@/lib/factory/stations";
 import { Line } from "../../_components/line";
 import { DecisionList } from "../../_components/decision-list";
+import { LocalServerPanel, LocalSiteLink } from "../../_components/local-server";
 import { ButtonPrimary, ButtonSecondary, Field, Panel } from "../../_components/panel";
 import { useNow } from "../../_components/use-now";
 
@@ -38,7 +39,7 @@ export default function ProjectPage() {
       </p>
     );
   }
-  const { project, runs, gate, decisions } = data;
+  const { project, runs, gate, decisions, localServer } = data;
   const latest = runs[0];
 
   async function start() {
@@ -67,6 +68,12 @@ export default function ProjectPage() {
                 <a href={`https://github.com/${project.repo}`} target="_blank" rel="noreferrer" className="factory-focus underline underline-offset-2">
                   {project.repo}
                 </a>
+              </>
+            )}
+            {localServer && (
+              <>
+                {" "}
+                · <LocalSiteLink server={localServer} />
               </>
             )}
             {project.devUrl && (
@@ -151,6 +158,8 @@ export default function ProjectPage() {
           <DecisionList items={decisions.map((decision) => ({ decision, projectName: project.name }))} />
         </Panel>
       </div>
+
+      <LocalServerPanel server={localServer} />
 
       <Panel title="Clerk application">
         <p className="text-[var(--ink-muted)] text-[length:var(--text-14)]">

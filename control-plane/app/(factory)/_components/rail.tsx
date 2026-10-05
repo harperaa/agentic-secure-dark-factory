@@ -7,10 +7,10 @@ import { ModeToggle } from "@/components/mode-toggle";
 
 const NAV: Array<{ href: string; label: string; match: (p: string) => boolean }> = [
   { href: "/floor", label: "Floor", match: (p) => p === "/floor" },
-  { href: "/floor#projects", label: "Projects", match: (p) => p.startsWith("/projects") || p.startsWith("/runs") },
+  { href: "/projects", label: "Projects", match: (p) => p.startsWith("/projects") || p.startsWith("/runs") },
   { href: "/decisions", label: "Decisions", match: (p) => p.startsWith("/decisions") },
   { href: "/audit", label: "Audit", match: (p) => p.startsWith("/audit") },
-  { href: "/settings/providers", label: "Settings", match: (p) => p.startsWith("/settings") },
+  { href: "/settings", label: "Settings", match: (p) => p.startsWith("/settings") },
 ];
 
 /** Station rail: fixed 240px on desktop, a top bar on mobile. Borders encode containment. */

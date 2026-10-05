@@ -43,5 +43,8 @@ while :; do
 done
 
 scored_at=$(printf '%s' "$newest" | jq -r '.at // ""')
-jq -cn --arg score "$score" --arg scored_at "$scored_at" --argjson unresolved "${unresolved:-0}" --argjson review "${review:-null}" --argjson summary "${summary:-null}" --argjson comments "$comments" \
-  '{score: (if $score == "" then null else ($score | tonumber) end), scored_at: (if $scored_at == "" then null else $scored_at end), unresolved: $unresolved, review_id: ($review.id // $summary.id // null), submitted_at: ($review.submitted_at // $summary.created_at // null), comments: $comments}'
+# The reviewer's own verdict, as plain text: the paragraph between the score heading and the
+# first sub-heading. It is what the operator reads in the decision instead of opening the PR.
+summary_text=$(printf '%s' "$newest" | jq -r '([(.body // "") | capture("</h2>(?<v>[\\s\\S]*?)(<h3>|<details|$)")][0].v // "") | gsub("<[^>]+>"; "") | gsub("\\s+"; " ") | gsub("^ +| +$"; "")')
+jq -cn --arg score "$score" --arg scored_at "$scored_at" --arg verdict "$summary_text" --argjson unresolved "${unresolved:-0}" --argjson review "${review:-null}" --argjson summary "${summary:-null}" --argjson comments "$comments" \
+  '{score: (if $score == "" then null else ($score | tonumber) end), summary: (if $verdict == "" then null else $verdict end), scored_at: (if $scored_at == "" then null else $scored_at end), unresolved: $unresolved, review_id: ($review.id // $summary.id // null), submitted_at: ($review.submitted_at // $summary.created_at // null), comments: $comments}'

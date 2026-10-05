@@ -26,7 +26,7 @@ The author's Machinist VM shape on the operator's own machine or VM (design §5.
 
    This writes `config.toml`, `worker.toml`, the prompts, and the worker token into `$MACHINIST_HOME`, and turns `$FACTORY_WORKSPACE` into a content-free Git repository. Machinist refuses to run a command outside a Git worktree, so the workspace genesis runs in must be one; products are cloned beneath it and ignored by its `.gitignore`.
 4. Register any existing product checkout: `factory/scripts/register-repository.sh <name> </absolute/path>`.
-5. Start both processes with the environment loaded. Script executors such as genesis read `FACTORY_*`, `VERCEL_SCOPE`, and the lockdown settings from the worker's environment, so the worker must be started from a shell that sourced `factory.env`:
+5. Start the local runtime with the environment loaded. Script executors such as genesis read `FACTORY_*`, `VERCEL_SCOPE`, and the lockdown settings from the worker's environment, so the worker must be started from a shell that sourced `factory.env`. The one script starts the Machinist control plane and worker, the bridge, a local dev server for every built product (`http://localhost:3100` upward, shown on each project page), and the control-plane UI with its Convex dev deployment; Ctrl-C stops all of them:
 
    ```bash
    factory/scripts/start-local.sh ~/.config/asdf/factory.env
@@ -68,7 +68,9 @@ factory/scripts/sdf.sh retry <name>                 # re-run the last failed sta
 factory/scripts/sdf.sh set-pr <name> <number>       # correct the tracked pull request
 ```
 
-The bridge (`node factory/bridge/bridge.mjs`) must be running for queued runs to reach Machinist.
+The bridge (`node factory/bridge/bridge.mjs`, started by `start-local.sh`) must be running for queued runs to reach Machinist.
+It also runs the products' local dev servers; `LOCAL_SERVERS=off` skips them and `LOCAL_SERVERS_MAX=<n>`
+caps how many run at once (default 0, no cap). `node factory/bridge/local-servers.mjs stop` stops them by hand.
 After genesis registers a new product repository, restart the worker so it advertises it; the
 bridge logs `restart the worker to advertise the new repository` on that effect.
 

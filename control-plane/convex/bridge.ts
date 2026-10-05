@@ -256,14 +256,16 @@ export const gateSync = mutation({
     projectId: v.id("projects"),
     pr: v.number(),
     headSha: v.optional(v.string()),
-    ci: v.array(v.object({ name: v.string(), conclusion: v.string(), required: v.optional(v.boolean()) })),
+    ci: v.array(v.object({ name: v.string(), conclusion: v.string(), required: v.optional(v.boolean()), url: v.optional(v.string()) })),
     reviewScore: v.union(v.number(), v.null()),
+    reviewSummary: v.optional(v.string()),
     unresolvedComments: v.number(),
     changedPaths: v.array(v.string()),
     labels: v.array(v.string()),
     reviewRequestedHead: v.optional(v.string()),
+    dependencyCooldown: v.optional(v.object({ ok: v.boolean(), checked: v.number(), violations: v.array(v.string()) })),
   },
-  handler: async (ctx, { secret, projectId, pr, headSha, ci, reviewScore, unresolvedComments, changedPaths, labels, reviewRequestedHead }) => {
+  handler: async (ctx, { secret, projectId, pr, headSha, ci, reviewScore, reviewSummary, unresolvedComments, changedPaths, labels, reviewRequestedHead, dependencyCooldown }) => {
     requireBridge(secret);
     const project = await ctx.db.get(projectId);
     if (!project) {
@@ -281,23 +283,23 @@ export const gateSync = mutation({
       unresolvedComments,
       round: existing?.review?.round ?? project.repairRound ?? 0,
       reviewedAt: now,
+      ...(reviewSummary ? { summary: reviewSummary.slice(0, 1200) } : {}),
     };
     const patch = { ...(headSha === undefined ? {} : { headSha }), ...(reviewRequestedHead === undefined ? {} : { reviewRequestedHead }), ci, review, updatedAt: now };
+    let changed = true;
     if (existing) {
       const norm = (list: Array<{ name: string; conclusion: string; required?: boolean }> | undefined) =>
         [...(list ?? [])].sort((a, b) => a.name.localeCompare(b.name)).map((c) => `${c.name}:${c.conclusion}:${c.required === true}`).join("|");
-      const changed = JSON.stringify({ ci: norm(existing.ci), s: existing.review?.score, u: existing.review?.unresolvedComments, h: existing.headSha }) !== JSON.stringify({ ci: norm(ci), s: reviewScore, u: unresolvedComments, h: headSha ?? existing.headSha });
+      changed = JSON.stringify({ ci: norm(existing.ci), s: existing.review?.score, u: existing.review?.unresolvedComments, h: existing.headSha, r: existing.review?.summary }) !== JSON.stringify({ ci: norm(ci), s: reviewScore, u: unresolvedComments, h: headSha ?? existing.headSha, r: reviewSummary ? reviewSummary.slice(0, 1200) : existing.review?.summary });
       await ctx.db.patch(existing._id, changed ? patch : { updatedAt: existing.updatedAt, ...(reviewRequestedHead === undefined ? {} : { reviewRequestedHead }) });
-      if (changed) {
-        await ctx.scheduler.runAfter(0, internal.gates.evaluate, { projectId });
-      }
     } else {
       const latestRun = await ctx.db.query("runs").withIndex("by_project", (q) => q.eq("projectId", projectId)).order("desc").first();
       await ctx.db.insert("gates", { ...(latestRun ? { runId: latestRun._id } : {}), projectId, pr, verdict: "pending", ...patch });
-      await ctx.scheduler.runAfter(0, internal.gates.evaluate, { projectId });
     }
-    // Record the changed paths and labels for the forced-gray classifier.
-    await ctx.scheduler.runAfter(0, internal.gates.classify, { projectId, pr, changedPaths, labels });
+    // Record the changed paths, labels, and lockfile cooldown for the forced-gray classifier, which
+    // then evaluates the gate. Classification first, always: a verdict reached on the previous
+    // head's classification could queue an auto-merge that nothing retracts.
+    await ctx.scheduler.runAfter(0, internal.gates.classify, { projectId, pr, changedPaths, labels, ...(dependencyCooldown ? { dependencyCooldown } : {}), evaluate: changed });
   },
 });
 
@@ -318,5 +320,82 @@ export const runById = query({
     requireBridge(secret);
     const run = await ctx.db.get(runId);
     return run ? { command: run.command, ref: run.ref ?? null, stage: run.stage } : null;
+  },
+});
+
+/**
+ * Projects the bridge should keep a local dev server running for: every product that genesis
+ * has created a repository for. Newest activity first, so a cap on concurrent servers keeps the
+ * ones the operator is most likely looking at.
+ */
+export const localTargets = query({
+  args: { secret: v.string() },
+  handler: async (ctx, { secret }) => {
+    requireBridge(secret);
+    const projects = await ctx.db.query("projects").collect();
+    const out = [];
+    for (const p of projects) {
+      if (p.repo === undefined || p.stage === "DRAFT" || p.stage === "GENESIS") continue;
+      const row = await ctx.db.query("localServers").withIndex("by_project", (q) => q.eq("projectId", p._id)).unique();
+      // A run in flight may be working in the same checkout (deploy-dev commits there), so the
+      // bridge must not install or pull under it.
+      const lastRun = await ctx.db.query("runs").withIndex("by_project", (q) => q.eq("projectId", p._id)).order("desc").first();
+      const busy = lastRun?.state === "queued" || lastRun?.state === "running";
+      out.push({ projectId: p._id, name: p.name, updatedAt: p.updatedAt, port: row?.port ?? null, secrets: p.providers.secrets ?? "doppler", busy });
+    }
+    return out.sort((a, b) => b.updatedAt - a.updatedAt);
+  },
+});
+
+const localStatusValidator = v.union(
+  v.literal("installing"),
+  v.literal("starting"),
+  v.literal("running"),
+  v.literal("failed"),
+  v.literal("stopped"),
+);
+
+/** Bridge reports the local dev server it is supervising for a project; one row per project. */
+export const localServerReport = mutation({
+  args: {
+    secret: v.string(),
+    projectId: v.id("projects"),
+    status: localStatusValidator,
+    port: v.number(),
+    url: v.string(),
+    pid: v.optional(v.number()),
+    command: v.string(),
+    checkout: v.string(),
+    head: v.optional(v.string()),
+    startedAt: v.optional(v.number()),
+    note: v.optional(v.string()),
+  },
+  handler: async (ctx, { secret, projectId, ...report }) => {
+    const actor = requireBridge(secret);
+    const existing = await ctx.db.query("localServers").withIndex("by_project", (q) => q.eq("projectId", projectId)).unique();
+    const now = Date.now();
+    // replace, not patch: optional fields are cleared when absent -- a stopped server has no pid,
+    // a healthy one no note.
+    const row = {
+      projectId,
+      ...Object.fromEntries(Object.entries(report).filter(([, val]) => val !== undefined)),
+      checkedAt: now,
+    } as typeof report & { projectId: typeof projectId; checkedAt: number };
+    if (existing) {
+      await ctx.db.replace(existing._id, row);
+    } else {
+      await ctx.db.insert("localServers", row);
+    }
+    // Audit transitions only; the every-poll heartbeat would drown the stream.
+    if (existing?.status !== report.status) {
+      await ctx.db.insert("events", {
+        projectId,
+        at: now,
+        actor,
+        action: "local.server",
+        before: existing ? { status: existing.status } : undefined,
+        after: { status: report.status, url: report.url, pid: report.pid ?? null, ...(report.note ? { note: report.note } : {}) },
+      });
+    }
   },
 });

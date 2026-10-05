@@ -149,6 +149,7 @@ export const factoryTables = {
           name: v.string(),
           conclusion: v.string(), // success | failure | neutral | pending | ...
           required: v.optional(v.boolean()), // a required status-check context on main
+          url: v.optional(v.string()), // the check's details page, for the decision's evidence
         }),
       ),
     ),
@@ -159,6 +160,7 @@ export const factoryTables = {
         unresolvedComments: v.number(),
         round: v.number(),
         reviewedAt: v.optional(v.number()),
+        summary: v.optional(v.string()), // the reviewer's own one-paragraph verdict, plain text
       }),
     ),
     assessment: v.optional(
@@ -179,6 +181,9 @@ export const factoryTables = {
     ),
     verdict: v.union(v.literal("pending"), v.literal("pass"), v.literal("fail")),
     reviewRequestedHead: v.optional(v.string()), // head sha a re-review was requested for (bridge, once per head)
+    // Lockfile cooldown (bridge, per head): every new package version public for 7 days, 14 for a
+    // major. When ok, a dependency change no longer forces gray on its own.
+    dependencyCooldown: v.optional(v.object({ ok: v.boolean(), checked: v.number(), violations: v.array(v.string()) })),
     updatedAt: v.number(),
   })
     .index("by_run", ["runId"])
@@ -212,6 +217,9 @@ export const factoryTables = {
       v.literal("dark-mode-checklist"),
     ),
     title: v.string(), // plain language, e.g. "Merge PR #43 into main?"
+    // What is blocking, one plain-language line each, so the operator can decide without opening
+    // the PR: failing checks, the score against the threshold, the reviewer's reason, what is asked.
+    detail: v.optional(v.array(v.string())),
     evidence: v.array(v.object({ label: v.string(), url: v.string() })),
     status: v.union(v.literal("open"), v.literal("resolved")),
     resolvedBy: v.optional(v.string()),
@@ -245,4 +253,45 @@ export const factoryTables = {
   })
     .index("by_status", ["status", "createdAt"])
     .index("by_project", ["projectId", "createdAt"]),
+
+  /**
+   * One local dev server per built product, run by the bridge on the worker machine so the
+   * operator can try the product before (and alongside) the hosted dev deploy. The bridge is the
+   * only writer; this is its account of the process, refreshed every poll, so a row whose
+   * `checkedAt` has gone stale means the bridge stopped reporting, not that the server is fine.
+   *
+   * The server binds to loopback only: the URL works on the worker machine and nowhere else.
+   */
+  localServers: defineTable({
+    projectId: v.id("projects"),
+    status: v.union(
+      v.literal("installing"), // npm ci in the checkout, before the first start
+      v.literal("starting"), // process spawned, port not answering yet
+      v.literal("running"),
+      v.literal("failed"),
+      v.literal("stopped"),
+    ),
+    port: v.number(),
+    url: v.string(),
+    pid: v.optional(v.number()),
+    command: v.string(), // what is running, for the operator: "next dev -H localhost -p 3101"
+    checkout: v.string(), // absolute path the server runs in
+    head: v.optional(v.string()), // short sha of the checkout it is serving
+    startedAt: v.optional(v.number()),
+    checkedAt: v.number(),
+    note: v.optional(v.string()), // the last error line when it failed
+  }).index("by_project", ["projectId"]),
+
+  /**
+   * Factory-wide settings: a single row, absent until the operator first saves. `mode` is the
+   * master switch over every project's own mode; the rest seed new specs.
+   */
+  factorySettings: defineTable({
+    mode: modeValidator,
+    greptileThreshold: v.number(),
+    maxRepairRounds: v.number(),
+    forcedGrayPaths: v.array(v.string()),
+    providerProfile: v.union(v.literal("default"), v.literal("eu")),
+    updatedAt: v.number(),
+  }),
 };

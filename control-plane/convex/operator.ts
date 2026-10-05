@@ -1,5 +1,6 @@
 import { internalQuery, query } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
+import { readFactorySettings } from "./lib/factorySettings";
 import { requireOperator } from "./lib/factoryAuth";
 
 /**
@@ -24,15 +25,31 @@ export const assertOperator = internalQuery({
  * admin_email falls back to the Clerk email already mirrored into `users`, so the very first
  * spec has a sensible default too. github_owner has no such source and is blank until a spec
  * supplies one.
+ *
+ * `policy` comes from factory settings rather than the last spec: review threshold, repair
+ * rounds, forced-gray paths, and provider profile are the factory's standing defaults.
  */
-export type SpecDefaults = { admin_email: string; github_owner: string };
+export type SpecPolicyDefaults = {
+  greptile_threshold: number;
+  max_repair_rounds: number;
+  forced_gray_paths: string[];
+  profile: "default" | "eu";
+};
+export type SpecDefaults = { admin_email: string; github_owner: string; policy: SpecPolicyDefaults };
 
 export const specDefaults = query({
   args: {},
   handler: async (ctx): Promise<SpecDefaults> => {
+    const factory = await readFactorySettings(ctx);
+    const policy: SpecPolicyDefaults = {
+      greptile_threshold: factory.greptileThreshold,
+      max_repair_rounds: factory.maxRepairRounds,
+      forced_gray_paths: factory.forcedGrayPaths,
+      profile: factory.providerProfile,
+    };
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) {
-      return { admin_email: "", github_owner: "" };
+      return { admin_email: "", github_owner: "", policy };
     }
     const record = await ctx.db
       .query("users")
@@ -43,6 +60,7 @@ export const specDefaults = query({
       // they sign in with should only have to say so once.
       admin_email: record?.specAdminEmail ?? record?.email ?? identity.email ?? "",
       github_owner: record?.specGithubOwner ?? "",
+      policy,
     };
   },
 });

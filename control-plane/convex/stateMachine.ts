@@ -3,6 +3,7 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
+import { effectiveMode, readFactorySettings } from "./lib/factorySettings";
 
 /**
  * Stage state machine (design §4.3, §11). Every transition is an `events` row. Every stage is
@@ -55,7 +56,7 @@ async function enqueue(ctx: MutationCtx, project: Project, stage: Project["stage
   });
 }
 
-async function stop(ctx: MutationCtx, project: Project, run: Doc<"runs">, title: string, kind: "unblock" | "provision" | "accept-finding" = "unblock") {
+async function stop(ctx: MutationCtx, project: Project, run: Doc<"runs">, title: string, kind: "unblock" | "provision" | "accept-finding" = "unblock", detail: string[] = []) {
   await transition(ctx, project, "NEEDS_HUMAN", run._id, { reason: title });
   await ctx.scheduler.runAfter(0, internal.alerts.notify, { title: `${project.name}: stopped`, text: title, ...(run.ref ? { url: run.ref } : {}) });
   await ctx.db.insert("decisions", {
@@ -63,6 +64,7 @@ async function stop(ctx: MutationCtx, project: Project, run: Doc<"runs">, title:
     runId: run._id,
     kind,
     title,
+    ...(detail.length > 0 ? { detail } : {}),
     evidence: [
       ...(run.ref ? [{ label: "Work item", url: run.ref }] : []),
       ...(project.repo ? [{ label: "Repository", url: `https://github.com/${project.repo}` }] : []),
@@ -102,7 +104,12 @@ export const onRunCompleted = internalMutation({
         await ctx.db.insert("events", { projectId: project._id, runId, at: Date.now(), actor: "system", action: "run.retry", after: { attempt: run.attempt + 1 } });
         return;
       }
-      await stop(ctx, project, run, `${run.stage} stopped: ${run.error ?? result["reason"] ?? "run failed"}`);
+      await stop(ctx, project, run, `${run.stage} stopped: ${run.error ?? result["reason"] ?? "run failed"}`, "unblock", [
+        `The ${run.command} run ${run.state === "timed_out" ? "timed out" : "failed"}${run.exitCode === undefined ? "" : ` with exit code ${run.exitCode}`}${run.attempt >= 2 ? " on its automatic retry" : ""}.`,
+        ...(run.progress ? [`It stopped at step "${run.progress.step}" (${run.progress.outcome})${run.progress.note ? `: ${run.progress.note}` : "."}`] : []),
+        ...(credential ? ["This looks like a missing credential or environment value, which only you can supply; it was not retried."] : []),
+        "Fix the cause, then unblock to run it again.",
+      ]);
       return;
     }
 
@@ -135,6 +142,16 @@ export const onRunCompleted = internalMutation({
         return;
       }
       case "REVIEW_LOOP": {
+        // The repair run judged that only the owner can clear this (a credential, a setting, a
+        // product decision). Its reason runs to the end of the line, spaces and all.
+        if (result["outcome"] === "needs-human") {
+          const reason = run.resultLine?.match(/\breason=(.*)$/)?.[1]?.trim() ?? "the repair run asked for a human";
+          await stop(ctx, project, run, `PR #${project.currentPr ?? "?"} needs you: ${reason}`, "unblock", [
+            `The repair run (round ${result["round"] ?? project.repairRound ?? "?"}) stopped because it needs the owner: ${reason}.`,
+            "Do what it asks on the pull request, then unblock to re-run the gate.",
+          ]);
+          return;
+        }
         // greptile-fix pushed; the reviewer's next verdict arrives by webhook, evaluate later.
         await ctx.scheduler.runAfter(120_000, internal.gates.evaluate, { projectId: project._id });
         return;
@@ -263,7 +280,8 @@ export const onIssueOpened = internalMutation({
     if (!requestLabel) {
       throw new Error("MISSING_ENV MACHINIST_REQUEST_LABEL");
     }
-    await enqueue(ctx, project, "TRIAGE", "triage", `--ref=${url} --mode=${project.mode} --forced-gray-paths=${project.forcedGrayPaths.join(",")} --request-label=${requestLabel}`, url);
+    const factory = await readFactorySettings(ctx);
+    await enqueue(ctx, project, "TRIAGE", "triage", `--ref=${url} --mode=${effectiveMode(factory.mode, project.mode)} --forced-gray-paths=${project.forcedGrayPaths.join(",")} --request-label=${requestLabel}`, url);
   },
 });
 

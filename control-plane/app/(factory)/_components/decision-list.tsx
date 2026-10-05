@@ -23,6 +23,15 @@ export function DecisionList({ items, emptyText = "Nothing to decide." }: { item
                 ·{" "}
               </span>
               <span className="break-words">{item.decision.title}</span>
+              {item.decision.detail && item.decision.detail.length > 0 && (
+                <ul role="list" className="mt-1 flex flex-col gap-0.5 text-[length:var(--text-12)] text-ink-muted">
+                  {item.decision.detail.map((line, i) => (
+                    <li key={i} className="break-words">
+                      {line}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
             <ButtonPrimary onClick={() => setOpenItem(item)} aria-label={`${decisionActions(item.decision.kind).primary}: ${item.decision.title}`}>
               {decisionActions(item.decision.kind).primary}
