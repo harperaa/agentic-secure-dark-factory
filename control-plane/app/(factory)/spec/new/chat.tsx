@@ -119,7 +119,7 @@ export function SpecChat({ onHandOff }: { onHandOff: (spec: SpecDoc) => void }) 
       const result = await draft({
         messages: next.map((t) => ({ role: t.role, text: t.text })),
         current: spec ?? undefined,
-        ...(defaults ? { defaults } : {}),
+        ...(defaults ? { defaults: { admin_email: defaults.admin_email, github_owner: defaults.github_owner }, policy: defaults.policy } : {}),
       });
       setTurns((ts) => [...ts, { role: "assistant", text: result.reply }]);
       if (result.spec) {

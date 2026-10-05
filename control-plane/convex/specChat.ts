@@ -6,6 +6,7 @@ import { action } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import schema from "../lib/factory/factory-spec.schema.json";
+import { DEFAULT_FACTORY_SETTINGS } from "./lib/factorySettings";
 
 /**
  * Spec chat (design §4.12): drafting a factory-spec by conversation instead of by form.
@@ -27,7 +28,17 @@ import schema from "../lib/factory/factory-spec.schema.json";
 
 const MODEL = "claude-opus-5";
 
-const SYSTEM = `You help an operator write a factory-spec for the Agentic Secure Dark Factory.
+type PolicyDefaults = { greptile_threshold: number; max_repair_rounds: number; forced_gray_paths: string[]; profile: "default" | "eu" };
+
+const FALLBACK_POLICY: PolicyDefaults = {
+  greptile_threshold: DEFAULT_FACTORY_SETTINGS.greptileThreshold,
+  max_repair_rounds: DEFAULT_FACTORY_SETTINGS.maxRepairRounds,
+  forced_gray_paths: DEFAULT_FACTORY_SETTINGS.forcedGrayPaths,
+  profile: DEFAULT_FACTORY_SETTINGS.providerProfile,
+};
+
+/** The policy defaults are the factory's settings, so the prompt is built per call. */
+const systemPrompt = (policy: PolicyDefaults) => `You help an operator write a factory-spec for the Agentic Secure Dark Factory.
 
 The spec is the artifact. Phases become GitHub issues; everything else becomes policy that
 governs how an autonomous factory builds and merges the product.
@@ -45,11 +56,10 @@ How to work:
 Defaults, unless the operator says otherwise:
 - mode "gray" (a human applies auto-merge). Only use "dark" if they ask for it, and say plainly
   that dark mode merges without a human.
-- greptile_threshold 5, max_repair_rounds 4, secrets_mode "doppler".
-- forced_gray_paths: middleware.ts, convex/auth*, app/api/**, lib/security/**, package.json,
-  package-lock.json. These force a human review whatever the mode; widen but do not narrow
+- greptile_threshold ${policy.greptile_threshold}, max_repair_rounds ${policy.max_repair_rounds}, secrets_mode "doppler".
+- forced_gray_paths: ${policy.forced_gray_paths.join(", ")}. These force a human review whatever the mode; widen but do not narrow
   them without the operator saying so.
-- providers: profile "default", sandbox "local".
+- providers: profile "${policy.profile}", sandbox "local".
 
 Never invent a credential, key, or identifier you were not given. Never invent admin_email or
 github_owner either: if the defaults below supply them, use them without asking; otherwise ask
@@ -188,8 +198,17 @@ export const draft = action({
     current: v.optional(v.any()),
     /** What this operator's last spec used, so the chat stops asking for it every time. */
     defaults: v.optional(v.object({ admin_email: v.string(), github_owner: v.string() })),
+    /** The factory's policy defaults (Settings), so a new spec starts from them. */
+    policy: v.optional(
+      v.object({
+        greptile_threshold: v.number(),
+        max_repair_rounds: v.number(),
+        forced_gray_paths: v.array(v.string()),
+        profile: v.union(v.literal("default"), v.literal("eu")),
+      }),
+    ),
   },
-  handler: async (ctx, { messages, current, defaults }) => {
+  handler: async (ctx, { messages, current, defaults, policy }) => {
     // Every turn is a billed Anthropic request on the deployment's key. The same gate as the
     // rest of the factory UI, and before anything else: an anonymous caller learns nothing, not
     // even whether the key is configured.
@@ -219,7 +238,7 @@ export const draft = action({
       .filter(([, value]) => value !== "")
       .map(([key, value]) => `- ${key}: ${value}`);
     const system = [
-      SYSTEM,
+      systemPrompt(policy ?? FALLBACK_POLICY),
       known.length > 0
         ? `Defaults for this operator, from the last spec they saved. Use them without asking, ` +
           `and follow any correction they make:\n${known.join("\n")}`

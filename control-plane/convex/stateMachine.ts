@@ -3,6 +3,7 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
+import { effectiveMode, readFactorySettings } from "./lib/factorySettings";
 
 /**
  * Stage state machine (design §4.3, §11). Every transition is an `events` row. Every stage is
@@ -263,7 +264,8 @@ export const onIssueOpened = internalMutation({
     if (!requestLabel) {
       throw new Error("MISSING_ENV MACHINIST_REQUEST_LABEL");
     }
-    await enqueue(ctx, project, "TRIAGE", "triage", `--ref=${url} --mode=${project.mode} --forced-gray-paths=${project.forcedGrayPaths.join(",")} --request-label=${requestLabel}`, url);
+    const factory = await readFactorySettings(ctx);
+    await enqueue(ctx, project, "TRIAGE", "triage", `--ref=${url} --mode=${effectiveMode(factory.mode, project.mode)} --forced-gray-paths=${project.forcedGrayPaths.join(",")} --request-label=${requestLabel}`, url);
   },
 });
 

@@ -273,3 +273,16 @@ export const factoryTables = {
     checkedAt: v.number(),
     note: v.optional(v.string()), // the last error line when it failed
   }).index("by_project", ["projectId"]),
+  /**
+   * Factory-wide settings: a single row, absent until the operator first saves. `mode` is the
+   * master switch over every project's own mode; the rest seed new specs.
+   */
+  factorySettings: defineTable({
+    mode: modeValidator,
+    greptileThreshold: v.number(),
+    maxRepairRounds: v.number(),
+    forcedGrayPaths: v.array(v.string()),
+    providerProfile: v.union(v.literal("default"), v.literal("eu")),
+    updatedAt: v.number(),
+  }),
+};

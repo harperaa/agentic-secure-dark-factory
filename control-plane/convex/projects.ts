@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { requireOperator } from "./lib/factoryAuth";
 import { rememberSpecDefaults } from "./operator";
 import { modeValidator, providerProfileValidator } from "./factoryTables";
+import { effectiveMode, readFactorySettings } from "./lib/factorySettings";
 
 /** Floor: every project with its station state. */
 export const list = query({
@@ -93,6 +94,7 @@ export const startLine = mutation({
     if (project.stage !== "DRAFT") {
       throw new Error(`project is at ${project.stage}, not DRAFT`);
     }
+    const factory = await readFactorySettings(ctx);
     const now = Date.now();
     await ctx.db.patch(projectId, { stage: "GENESIS", updatedAt: now });
     const runId = await ctx.db.insert("runs", {
@@ -100,7 +102,8 @@ export const startLine = mutation({
       stage: "GENESIS",
       command: "genesis",
       repository: process.env.FACTORY_WORKSPACE_REPOSITORY ?? "factory-workspace",
-      prompt: JSON.stringify(project.spec),
+      // Genesis sets branch protection from the spec's mode, so the master switch applies here too.
+      prompt: JSON.stringify({ ...project.spec, mode: effectiveMode(factory.mode, project.mode) }),
       state: "queued",
       attempt: 1,
       queuedAt: now,

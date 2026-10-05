@@ -2,6 +2,7 @@ import { internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { classifyForcedGray, mayAutoMerge } from "../factory/policy/forcedGray";
+import { effectiveMode, readFactorySettings } from "./lib/factorySettings";
 
 /**
  * Review-loop gate (design §4.7, §4.9). Runs after a foreman hand-off and after every reviewer or
@@ -80,7 +81,9 @@ export const evaluate = internalMutation({
     await ctx.db.insert("events", { projectId, at: now, actor: "system", action: "gate.verdict", after: { verdict, ci: ciPassed, review: review?.score ?? null, forced } });
 
     if (verdict === "pass") {
-      if (mayAutoMerge({ mode: project.mode, forcedGray: { forced, reasons: forcedGray.reasons }, gateVerdict: "pass" })) {
+      // Factory gray is the master switch: it holds every project to a human merge.
+      const factory = await readFactorySettings(ctx);
+      if (mayAutoMerge({ mode: effectiveMode(factory.mode, project.mode), forcedGray: { forced, reasons: forcedGray.reasons }, gateVerdict: "pass" })) {
         await ctx.db.insert("effects", {
           projectId,
           kind: "apply-label",
