@@ -64,7 +64,7 @@ export default function RunPage() {
           <Field label="Runtime">{run.repository}</Field>
           <Field label="Model">{run.model ?? run.executor ?? "—"}</Field>
           <Field label="Elapsed">{run.startedAt ? elapsed(run.startedAt, run.completedAt ?? now) : "not started"}</Field>
-          <Field label="Tokens">{run.tokenUsage ? `${run.tokenUsage.input.toLocaleString()} in / ${run.tokenUsage.output.toLocaleString()} out` : "—"}</Field>
+          <Field label="Tokens">{run.tokenUsage?.toLocaleString() ?? "—"}</Field>
         </dl>
       </header>
 
