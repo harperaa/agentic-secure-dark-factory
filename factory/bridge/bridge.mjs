@@ -266,6 +266,14 @@ async function runEffect(effect) {
         result = { label: a.label };
         break;
       }
+      case "protect": {
+        // Branch protection for the mode the project now runs in, through the same adapter call
+        // genesis makes, from inside the product's checkout (the template's lockdown script runs there).
+        const r = sh(path.join(factoryRoot, "factory/scripts/protect-repo.sh"), [a.repo, a.mode, a.name, JSON.stringify(a.providers ?? {})]);
+        if (!r.ok) throw new Error((r.stderr || r.stdout).trim().slice(-400));
+        result = { mode: a.mode };
+        break;
+      }
       case "remove-label": {
         const r = sh("gh", ["issue", "edit", String(a.number), "--repo", a.repo, "--remove-label", a.label]);
         if (!r.ok) throw new Error(r.stderr.trim());

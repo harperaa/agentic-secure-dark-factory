@@ -151,6 +151,19 @@ export const setMode = mutation({
       after: { mode },
       ...(note === undefined ? {} : { note }),
     });
+    // GitHub's rules must follow the mode the control plane acts on. calorie-ledger was drafted
+    // gray (team lockdown, one review), switched to dark later, and the shepherd then could not
+    // merge: nobody can approve their own pull request. Re-apply protection for the new mode.
+    if (project.repo) {
+      const factory = await readFactorySettings(ctx);
+      await ctx.db.insert("effects", {
+        projectId,
+        kind: "protect",
+        args: { repo: project.repo, name: project.name, mode: effectiveMode(factory.mode, mode), providers: project.providers },
+        status: "queued",
+        createdAt: now,
+      });
+    }
   },
 });
 
