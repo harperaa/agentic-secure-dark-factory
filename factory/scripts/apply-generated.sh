@@ -12,7 +12,7 @@ target="${1:-}"
 src="$SCRIPT_DIR/../generated"
 marker="factory-managed"
 # Files the product owns after the first write: the factory seeds them and never overwrites.
-write_once='.secrets.baseline security_context/accepted.json'
+write_once='.secrets.baseline security_context/accepted.json audit-allowlist.json'
 
 while IFS= read -r -d '' file; do
   rel="${file#"$src"/}"

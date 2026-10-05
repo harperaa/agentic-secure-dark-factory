@@ -28,7 +28,7 @@ npm run lint
 npm run typecheck
 npm test
 npm run build
-npm audit --audit-level=high
+node scripts/audit.mjs   # npm audit --audit-level=high, through audit-allowlist.json
 ```
 
 The `factory-security` workflow additionally runs Semgrep, secret detection, and the

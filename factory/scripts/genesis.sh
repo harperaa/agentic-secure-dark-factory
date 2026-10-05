@@ -171,6 +171,24 @@ log $STAGE generated-files started
 "$SCRIPT_DIR/apply-generated.sh" "$target"
 log $STAGE generated-files passed
 
+# --- 8a. The template's required `security` check runs npm audit bare, which fails on any high
+# advisory with no patched release and holds every pull request. Route it through the factory's
+# audit script and the product's operator-owned allowlist (both written above). One line of the
+# template's ci.yml, rewritten idempotently; pending upstream (SVCOS #8, docs/upstream).
+ci_workflow=.github/workflows/ci.yml
+if [ ! -f "$ci_workflow" ]; then
+  log $STAGE audit-allowlist skipped reason=no-ci-workflow
+elif grep -qE '^[[:space:]]*- run: node scripts/audit\.mjs[[:space:]]*$' "$ci_workflow"; then
+  log $STAGE audit-allowlist skipped
+elif grep -qE '^[[:space:]]*- run: npm audit --audit-level=high[[:space:]]*$' "$ci_workflow"; then
+  log $STAGE audit-allowlist started
+  # [[:space:]] rather than \s: BSD sed (macOS) has no \s and would silently change nothing.
+  sed -i.bak -E 's#^([[:space:]]*)- run: npm audit --audit-level=high[[:space:]]*$#\1- run: node scripts/audit.mjs#' "$ci_workflow" && rm -f "$ci_workflow.bak"
+  log $STAGE audit-allowlist passed
+else
+  log $STAGE audit-allowlist skipped reason=no-npm-audit-step
+fi
+
 # --- 8b. Secrets baseline from a real scan (the seed file only carries the exclude rules) ---
 # The template ships example strings in app code that only a scan can baseline; without it
 # the product's required `secrets` check fails on its first PR.
