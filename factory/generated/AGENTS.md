@@ -35,6 +35,14 @@ The `factory-security` workflow additionally runs Semgrep, secret detection, and
 SVCOS security check on every pull request. Treat a failure as a defect to fix, never as
 a check to disable.
 
+One exception exists, and only the operator may invoke it: an advisory with no patched
+release may be accepted in `audit-allowlist.json`, with a reason and a review date, and
+`scripts/audit.mjs` then runs `npm audit --audit-level=high` through that list. The
+check still fails when the date passes, when a fix appears, or when the advisory is no
+longer reported, so an entry cannot outlive its justification. Agents never add, extend,
+or remove entries, and never replace the audit step with anything else; when the only
+failing finding has no fix, stop with `needs-human` and say so.
+
 ## Security rules
 
 - No secrets in code, tests, fixtures, or commit messages. Secrets come from the secrets

@@ -29,7 +29,13 @@ try {
   console.error(`AUDIT step=npm-audit outcome=failed note=${(r.stderr || r.stdout).trim().slice(0, 300)}`);
   process.exit(1);
 }
-const vulns = report.vulnerabilities ?? {};
+// A registry failure comes back as parseable JSON too, with an `error` and no `vulnerabilities`;
+// that is an audit that did not happen, not a clean one.
+if (report.error || typeof report.vulnerabilities !== "object" || report.vulnerabilities === null) {
+  console.error(`AUDIT step=npm-audit outcome=failed note=${JSON.stringify(report.error ?? "no vulnerabilities field in the report").slice(0, 300)}`);
+  process.exit(1);
+}
+const vulns = report.vulnerabilities;
 const failures = [];
 
 const ghsa = (via) => via.url?.match(/GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}/)?.[0];
