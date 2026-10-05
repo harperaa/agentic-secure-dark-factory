@@ -243,6 +243,7 @@ export const factoryTables = {
       v.literal("create-phase-issues"),
       v.literal("register-repository"),
       v.literal("reveal-claim-url"),
+      v.literal("protect"), // re-apply branch protection for the mode the project now runs in
     ),
     args: v.any(),
     status: v.union(v.literal("queued"), v.literal("running"), v.literal("done"), v.literal("failed")),

@@ -2,7 +2,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { modeValidator } from "./factoryTables";
 import { requireOperator } from "./lib/factoryAuth";
-import { readFactorySettings } from "./lib/factorySettings";
+import { effectiveMode, readFactorySettings } from "./lib/factorySettings";
 
 /**
  * Deployment configuration the factory depends on, reported as set or not set. Values are never
@@ -67,6 +67,14 @@ export const update = mutation({
     // auto-merge label is cancelled, and one already on a pull request is taken off, so the
     // shepherd -- which merges only labelled PRs -- stands down. The gate re-evaluates later and
     // opens a decision instead.
+    // Branch protection follows the effective mode; re-apply it wherever this flip changed it.
+    if (before.mode !== settings.mode) {
+      for (const p of await ctx.db.query("projects").collect()) {
+        if (p.repo && effectiveMode(before.mode, p.mode) !== effectiveMode(settings.mode, p.mode)) {
+          await ctx.db.insert("effects", { projectId: p._id, kind: "protect", args: { repo: p.repo, name: p.name, mode: effectiveMode(settings.mode, p.mode), providers: p.providers }, status: "queued", createdAt: now });
+        }
+      }
+    }
     if (before.mode !== "gray" && settings.mode === "gray") {
       const queued = await ctx.db.query("effects").filter((q) => q.eq(q.field("status"), "queued")).collect();
       for (const e of queued) {
