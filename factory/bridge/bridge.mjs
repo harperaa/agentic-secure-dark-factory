@@ -6,12 +6,15 @@
 //
 // Env: CONVEX_URL (deployment URL), FACTORY_BRIDGE_SECRET, MACHINIST_URL, MACHINIST_TOKEN_FILE,
 //      FACTORY_ROOT, MACHINIST_HOME, BRIDGE_POLL_MS (optional).
+//      Local dev servers: FACTORY_WORKSPACE, LOCAL_SERVERS (on|off, default on),
+//      LOCAL_SERVERS_MAX (default 0 = no limit), LOCAL_SERVERS_PORT_BASE (default 3100).
 import { ConvexHttpClient } from "convex/browser";
 import { anyApi } from "convex/server";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import path from "node:path";
+import { createLocalServers } from "./local-servers.mjs";
 
 const required = ["CONVEX_URL", "FACTORY_BRIDGE_SECRET", "MACHINIST_URL", "MACHINIST_TOKEN_FILE", "FACTORY_ROOT", "MACHINIST_HOME"];
 for (const name of required) {
@@ -349,3 +352,9 @@ for (;;) {
   }
   await new Promise((r) => setTimeout(r, pollMs));
 }
+// --- local dev servers (see local-servers.mjs) ----------------------------------------------
+const superviseLocal =
+  process.env.LOCAL_SERVERS !== "off" && process.env.FACTORY_WORKSPACE
+    ? createLocalServers({ convex, api, secret, machinistHome, workspace: expand(process.env.FACTORY_WORKSPACE), log })
+    : async () => {};
+  await superviseLocal();

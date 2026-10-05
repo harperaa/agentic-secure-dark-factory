@@ -60,7 +60,11 @@ export const project = query({
       .withIndex("by_project_status", (q) => q.eq("projectId", projectId).eq("status", "open"))
       .order("desc")
       .collect();
-    return { project, runs, gate, decisions };
+    const localServer = await ctx.db
+      .query("localServers")
+      .withIndex("by_project", (q) => q.eq("projectId", projectId))
+      .unique();
+    return { project, runs, gate, decisions, localServer };
   },
 });
 

@@ -121,7 +121,7 @@ the spec JSON as the prompt. See [docs/runtimes/local.md](docs/runtimes/local.md
 | M7 EU profile | adapters written with honest `verified: false` capabilities; identity and payments refused until SVCOS modules exist |
 | M8 Upstream proposals | done: six issues on Secure Vibe Coding OS (#5–#10) and the Machinist `Runtime` seam ([machinist#480](https://github.com/owainlewis/machinist/issues/480)) |
 
-Runtime pieces on the operator machine: `factory/scripts/start-local.sh` (Machinist), `factory/bridge/bridge.mjs` (bridge), `factory/scripts/doctor.sh` (onboarding discovery). See [docs/design.md](docs/design.md#14-milestones).
+Runtime pieces on the operator machine: `factory/scripts/start-local.sh` (Machinist, the bridge, product dev servers, and the UI), `factory/bridge/bridge.mjs` (bridge), `factory/scripts/doctor.sh` (onboarding discovery). See [docs/design.md](docs/design.md#14-milestones).
 
 ## License
 

@@ -246,3 +246,30 @@ export const factoryTables = {
     .index("by_status", ["status", "createdAt"])
     .index("by_project", ["projectId", "createdAt"]),
 };
+  /**
+   * One local dev server per built product, run by the bridge on the worker machine so the
+   * operator can try the product before (and alongside) the hosted dev deploy. The bridge is the
+   * only writer; this is its account of the process, refreshed every poll, so a row whose
+   * `checkedAt` has gone stale means the bridge stopped reporting, not that the server is fine.
+   *
+   * The server binds to loopback only: the URL works on the worker machine and nowhere else.
+   */
+  localServers: defineTable({
+    projectId: v.id("projects"),
+    status: v.union(
+      v.literal("installing"), // npm ci in the checkout, before the first start
+      v.literal("starting"), // process spawned, port not answering yet
+      v.literal("running"),
+      v.literal("failed"),
+      v.literal("stopped"),
+    ),
+    port: v.number(),
+    url: v.string(),
+    pid: v.optional(v.number()),
+    command: v.string(), // what is running, for the operator: "next dev -H localhost -p 3101"
+    checkout: v.string(), // absolute path the server runs in
+    head: v.optional(v.string()), // short sha of the checkout it is serving
+    startedAt: v.optional(v.number()),
+    checkedAt: v.number(),
+    note: v.optional(v.string()), // the last error line when it failed
+  }).index("by_project", ["projectId"]),

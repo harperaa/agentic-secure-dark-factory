@@ -320,3 +320,79 @@ export const runById = query({
     return run ? { command: run.command, ref: run.ref ?? null, stage: run.stage } : null;
   },
 });
+/**
+ * Projects the bridge should keep a local dev server running for: every product that genesis
+ * has created a repository for. Newest activity first, so a cap on concurrent servers keeps the
+ * ones the operator is most likely looking at.
+ */
+export const localTargets = query({
+  args: { secret: v.string() },
+  handler: async (ctx, { secret }) => {
+    requireBridge(secret);
+    const projects = await ctx.db.query("projects").collect();
+    const out = [];
+    for (const p of projects) {
+      if (p.repo === undefined || p.stage === "DRAFT" || p.stage === "GENESIS") continue;
+      const row = await ctx.db.query("localServers").withIndex("by_project", (q) => q.eq("projectId", p._id)).unique();
+      // A run in flight may be working in the same checkout (deploy-dev commits there), so the
+      // bridge must not install or pull under it.
+      const lastRun = await ctx.db.query("runs").withIndex("by_project", (q) => q.eq("projectId", p._id)).order("desc").first();
+      const busy = lastRun?.state === "queued" || lastRun?.state === "running";
+      out.push({ projectId: p._id, name: p.name, updatedAt: p.updatedAt, port: row?.port ?? null, secrets: p.providers.secrets ?? "doppler", busy });
+    }
+    return out.sort((a, b) => b.updatedAt - a.updatedAt);
+  },
+});
+
+const localStatusValidator = v.union(
+  v.literal("installing"),
+  v.literal("starting"),
+  v.literal("running"),
+  v.literal("failed"),
+  v.literal("stopped"),
+);
+
+/** Bridge reports the local dev server it is supervising for a project; one row per project. */
+export const localServerReport = mutation({
+  args: {
+    secret: v.string(),
+    projectId: v.id("projects"),
+    status: localStatusValidator,
+    port: v.number(),
+    url: v.string(),
+    pid: v.optional(v.number()),
+    command: v.string(),
+    checkout: v.string(),
+    head: v.optional(v.string()),
+    startedAt: v.optional(v.number()),
+    note: v.optional(v.string()),
+  },
+  handler: async (ctx, { secret, projectId, ...report }) => {
+    const actor = requireBridge(secret);
+    const existing = await ctx.db.query("localServers").withIndex("by_project", (q) => q.eq("projectId", projectId)).unique();
+    const now = Date.now();
+    // replace, not patch: optional fields are cleared when absent -- a stopped server has no pid,
+    // a healthy one no note.
+    const row = {
+      projectId,
+      ...Object.fromEntries(Object.entries(report).filter(([, val]) => val !== undefined)),
+      checkedAt: now,
+    } as typeof report & { projectId: typeof projectId; checkedAt: number };
+    if (existing) {
+      await ctx.db.replace(existing._id, row);
+    } else {
+      await ctx.db.insert("localServers", row);
+    }
+    // Audit transitions only; the every-poll heartbeat would drown the stream.
+    if (existing?.status !== report.status) {
+      await ctx.db.insert("events", {
+        projectId,
+        at: now,
+        actor,
+        action: "local.server",
+        before: existing ? { status: existing.status } : undefined,
+        after: { status: report.status, url: report.url, pid: report.pid ?? null, ...(report.note ? { note: report.note } : {}) },
+      });
+    }
+  },
+});
