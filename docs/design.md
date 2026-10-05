@@ -829,7 +829,7 @@ Rule: if a change *only* makes sense inside SVCOS or Machinist, it is filed as a
 | R21 | A product repository registered after genesis is not advertised until the worker restarts; a foreman job for it waits in the queue. | bridge logs the need; automate with a worker reload or a per-product worker |
 | R22 | The foreman's automation gate needs the product's `main` to pass every required check on day one; the template's lockfile advisories and example strings blocked both first products. | genesis now audit-fixes and scans a real baseline; upstream SVCOS issues #7–#9 |
 | R23 | Gray mode with team lockdown (one required review) blocks a solo operator's own products exactly as it blocked the factory repo. | per-product decision at genesis (`LOCKDOWN_MODE_GRAY=solo` for solo operators) or a second reviewer identity |
-| R18 | Machinist moves fast (v0.2.0 → v0.4.0 in three days); prompt and config formats may change under the factory. | pin `MACHINIST_VERSION`; fetch prompts at that tag; re-verify on every bump |
+| R18 | Machinist moves fast (v0.2.0 → v0.4.0 in three days); prompt and config formats may change under the factory. | pin `MACHINIST_VERSION`; fetch prompts at `MACHINIST_PROMPTS_REF` (pinned apart, since upstream removed foreman/shepherd after v0.4.0); re-verify on every bump |
 
 ## 13. Repository
 

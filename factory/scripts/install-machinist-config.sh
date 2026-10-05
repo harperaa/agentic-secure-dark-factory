@@ -42,11 +42,13 @@ log INSTALL config passed path="$home"
 
 cp "$SCRIPT_DIR/../commands/assess.md" "$SCRIPT_DIR/../commands/greptile-fix.md" \
    "$SCRIPT_DIR/../commands/triage.md" "$home/prompts/"
-base="https://raw.githubusercontent.com/owainlewis/machinist/$MACHINIST_VERSION/examples/prompts"
+# Prompts are pinned apart from the binary: upstream deleted them after v0.4.0 (machinist#488).
+prompts_ref="${MACHINIST_PROMPTS_REF:-v0.4.0}"
+base="https://raw.githubusercontent.com/owainlewis/machinist/$prompts_ref/examples/prompts"
 for p in foreman shepherd; do
   curl -fsSL "$base/$p.md" -o "$home/prompts/$p.md"
 done
-log INSTALL prompts passed machinist="$MACHINIST_VERSION"
+log INSTALL prompts passed machinist="$MACHINIST_VERSION" prompts="$prompts_ref"
 
 if [ ! -s "$token_file" ]; then
   ( umask 077; head -c 32 /dev/urandom | base64 | tr -d '\n=' > "$token_file" )
