@@ -384,9 +384,11 @@ async function tick() {
     if (!tracked.has(run._id)) await submitRun(run);
   }
   for (const effect of effects) await runEffect(effect);
+  // The dev servers need only Convex and this machine, so they are looked after before anything
+  // that talks to Machinist: when it is down, their status must not go stale with it.
+  await superviseLocal();
   await reconcileRuns();
   await syncGates();
-  await superviseLocal();
 }
 
 log("start", "passed", `convex=${process.env.CONVEX_URL} machinist=${machinistUrl} poll_ms=${pollMs}`);
