@@ -189,8 +189,10 @@ export const classify = internalMutation({
     changedPaths: v.array(v.string()),
     labels: v.array(v.string()),
     dependencyCooldown: v.optional(v.object({ ok: v.boolean(), checked: v.number(), violations: v.array(v.string()) })),
+    /** Evaluate the gate afterwards even if the classification did not change (gate state did). */
+    evaluate: v.optional(v.boolean()),
   },
-  handler: async (ctx, { projectId, pr, changedPaths, labels, dependencyCooldown }) => {
+  handler: async (ctx, { projectId, pr, changedPaths, labels, dependencyCooldown, evaluate }) => {
     const project = await ctx.db.get(projectId);
     if (!project) {
       return;
@@ -206,8 +208,9 @@ export const classify = internalMutation({
     const result = classifyForcedGray({ changedPaths, forcedGrayPaths: project.forcedGrayPaths, labels, ...(dependencyCooldown ? { dependencyCooldown } : {}) });
     const before = JSON.stringify(gate.forcedGray ?? null);
     await ctx.db.patch(gate._id, { forcedGray: result, ...(dependencyCooldown ? { dependencyCooldown } : {}), updatedAt: Date.now() });
-    // A cooldown that clears a dependency change can lift forced gray; let the gate see it now.
-    if (before !== JSON.stringify(result)) {
+    // The gate runs after the classification is stored, never before it: a verdict reached on
+    // the previous head's classification could queue an auto-merge that nothing retracts.
+    if (evaluate || before !== JSON.stringify(result)) {
       await ctx.scheduler.runAfter(0, internal.gates.evaluate, { projectId });
     }
   },

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { Settings } from "lucide-react";
+import { useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import { stageCopy } from "@/lib/factory/copy";
@@ -11,6 +12,9 @@ type FloorRow = FunctionReturnType<typeof api.ui.floor>[number];
 
 /** One live line per project: name and stage, the line itself, then review score and open decisions. */
 export function ProjectList({ rows }: { rows: FloorRow[] | undefined }) {
+  // Factory gray holds every project to a human merge, whatever the project says; a row that
+  // read "dark" under that hold would promise autonomy the project does not have right now.
+  const held = useQuery(api.settings.get)?.settings.mode === "gray";
   if (rows === undefined) {
     return <p className="text-[length:var(--text-14)] text-ink-muted">Loading the line…</p>;
   }
@@ -54,7 +58,14 @@ export function ProjectList({ rows }: { rows: FloorRow[] | undefined }) {
                 {openDecisions} to decide
               </span>
             )}
-            {project.mode === "dark" && <span className="ml-2">dark</span>}
+            {project.mode === "dark" &&
+              (held ? (
+                <span className="ml-2" title="This project is set to dark, but factory mode is gray: every merge waits for you.">
+                  dark · held
+                </span>
+              ) : (
+                <span className="ml-2">dark</span>
+              ))}
           </div>
         </li>
       ))}

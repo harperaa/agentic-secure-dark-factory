@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { addedVersions, cooldownVerdict } from "./dependency-cooldown.mjs";
+import { addedVersions, cooldownVerdict, supportedLockfile } from "./dependency-cooldown.mjs";
 
 const reg = (name, version) => ({ version, resolved: `https://registry.npmjs.org/${name}/-/${name.split("/").pop()}-${version}.tgz` });
 const lock = (pkgs) => ({ lockfileVersion: 3, packages: { "": { name: "app" }, ...Object.fromEntries(pkgs.map(([key, entry]) => [key, entry])) } });
@@ -48,4 +48,19 @@ test("an undated or non-registry version cannot pass", async () => {
   const v = await cooldownVerdict(lock([]), head, async () => undefined, NOW);
   assert.equal(v.ok, false);
   assert.equal(v.violations.length, 2);
+});
+
+test("the window follows the version replaced at the same location, not another major elsewhere in the tree", () => {
+  // base: a@1 at the top level, a@2 nested under x. Upgrading the top-level a to a@2.1 replaces a@1: 14 days.
+  const base = lock([["node_modules/a", reg("a", "1.0.0")], ["node_modules/x/node_modules/a", reg("a", "2.0.0")]]);
+  const head = lock([["node_modules/a", reg("a", "2.1.0")], ["node_modules/x/node_modules/a", reg("a", "2.0.0")]]);
+  assert.deepEqual(addedVersions(base, head).added, [{ name: "a", version: "2.1.0", requiredDays: 14 }]);
+});
+
+test("a v1 lockfile cannot be checked and never passes", async () => {
+  const v1 = { lockfileVersion: 1, dependencies: { fresh: { version: "1.0.0" } } };
+  assert.equal(supportedLockfile(v1), false);
+  const v = await cooldownVerdict(lock([]), v1, async () => daysAgo(30), NOW);
+  assert.equal(v.ok, false);
+  assert.match(v.violations[0], /head package-lock.json is lockfileVersion 1/);
 });

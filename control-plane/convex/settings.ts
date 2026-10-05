@@ -63,6 +63,24 @@ export const update = mutation({
     } else {
       await ctx.db.insert("factorySettings", { ...settings, updatedAt: now });
     }
+    // Gray is a hold, and a hold must also stop what dark mode already set in motion: a queued
+    // auto-merge label is cancelled, and one already on a pull request is taken off, so the
+    // shepherd -- which merges only labelled PRs -- stands down. The gate re-evaluates later and
+    // opens a decision instead.
+    if (before.mode !== "gray" && settings.mode === "gray") {
+      const queued = await ctx.db.query("effects").filter((q) => q.eq(q.field("status"), "queued")).collect();
+      for (const e of queued) {
+        if (e.kind === "apply-label" && (e.args as { label?: string }).label === "machinist:auto-merge") {
+          await ctx.db.patch(e._id, { status: "failed", error: "cancelled: the factory was switched to gray", completedAt: now });
+        }
+      }
+      for (const p of await ctx.db.query("projects").collect()) {
+        if (p.stage === "REVIEW_LOOP" && p.currentPr !== undefined && p.repo) {
+          await ctx.db.insert("effects", { projectId: p._id, kind: "remove-label", args: { repo: p.repo, number: p.currentPr, label: "machinist:auto-merge" }, status: "queued", createdAt: now });
+          await ctx.db.insert("events", { projectId: p._id, at: now, actor, action: "decision.auto-merge.revoked", after: { pr: p.currentPr, reason: "factory mode set to gray" } });
+        }
+      }
+    }
     await ctx.db.insert("events", {
       at: now,
       actor,

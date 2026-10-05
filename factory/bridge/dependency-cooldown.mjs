@@ -14,14 +14,15 @@ export const MAJOR_DAYS = 14;
 const DAY = 24 * 60 * 60 * 1000;
 const REGISTRY = "https://registry.npmjs.org/";
 
-/** name -> Map(version -> entry) for every installed package in a v2/v3 package-lock.json. */
-function lockPackages(lock) {
+/** Only v2 and v3 lockfiles carry the `packages` map this reads; a v1 lockfile would look empty. */
+export const supportedLockfile = (lock) => Number(lock?.lockfileVersion) >= 2 && typeof lock?.packages === "object" && lock.packages !== null;
+
+/** location in node_modules -> entry (with its name) for every installed package in a v2/v3 lockfile. */
+function lockEntries(lock) {
   const out = new Map();
   for (const [key, entry] of Object.entries(lock?.packages ?? {})) {
     if (key === "" || !key.includes("node_modules/")) continue; // the root project, or a workspace
-    const name = entry.name ?? key.slice(key.lastIndexOf("node_modules/") + "node_modules/".length);
-    if (!out.has(name)) out.set(name, new Map());
-    out.get(name).set(entry.version, entry);
+    out.set(key, { ...entry, name: entry.name ?? key.slice(key.lastIndexOf("node_modules/") + "node_modules/".length) });
   }
   return out;
 }
@@ -30,26 +31,32 @@ const major = (version) => Number(String(version).split(".")[0]);
 
 /**
  * The package versions in `head` that are not in `base`, each with the window it must clear:
- * 14 days when the package existed in base at a different major, else 7. Entries that do not come
+ * 14 days when it replaces a different major at the same location, else 7. Entries that do not come
  * from the npm registry (git, tarball, file links) cannot be dated and are returned as unverifiable.
  */
 export function addedVersions(baseLock, headLock) {
-  const base = lockPackages(baseLock);
-  const head = lockPackages(headLock);
+  const base = lockEntries(baseLock);
+  const head = lockEntries(headLock);
+  const baseVersions = new Map(); // name -> Set(version), anywhere in the tree
+  for (const entry of base.values()) {
+    if (!baseVersions.has(entry.name)) baseVersions.set(entry.name, new Set());
+    baseVersions.get(entry.name).add(entry.version);
+  }
   const added = [];
   const unverifiable = [];
-  for (const [name, versions] of head) {
-    for (const [version, entry] of versions) {
-      if (base.get(name)?.has(version)) continue;
-      if (entry.link || !version) continue; // a symlinked local package carries no published release
-      if (typeof entry.resolved === "string" && !entry.resolved.startsWith(REGISTRY)) {
-        unverifiable.push({ name, version, reason: `not from the npm registry (${entry.resolved.split("#")[0]})` });
-        continue;
-      }
-      const before = [...(base.get(name)?.keys() ?? [])];
-      const majorBump = before.length > 0 && !before.some((v) => major(v) === major(version));
-      added.push({ name, version, requiredDays: majorBump ? MAJOR_DAYS : MIN_DAYS });
+  for (const [key, entry] of head) {
+    const { name, version } = entry;
+    if (baseVersions.get(name)?.has(version)) continue;
+    if (entry.link || !version) continue; // a symlinked local package carries no published release
+    if (typeof entry.resolved === "string" && !entry.resolved.startsWith(REGISTRY)) {
+      unverifiable.push({ name, version, reason: `not from the npm registry (${entry.resolved.split("#")[0]})` });
+      continue;
     }
+    // The window is judged against the version this one replaces: the entry at the same location
+    // in base. Another major of the same package elsewhere in the tree says nothing about it.
+    const replaced = base.get(key);
+    const majorBump = replaced !== undefined && replaced.name === name && major(replaced.version) !== major(version);
+    added.push({ name, version, requiredDays: majorBump ? MAJOR_DAYS : MIN_DAYS });
   }
   return { added, unverifiable };
 }
@@ -60,6 +67,11 @@ export function addedVersions(baseLock, headLock) {
  * was dated and old enough, and nothing was unverifiable.
  */
 export async function cooldownVerdict(baseLock, headLock, publishedAt, now = Date.now()) {
+  for (const [side, lock] of [["base", baseLock], ["head", headLock]]) {
+    if (!supportedLockfile(lock)) {
+      return { ok: false, checked: 0, violations: [`${side} package-lock.json is lockfileVersion ${lock?.lockfileVersion ?? "unknown"}; only v2 and v3 lockfiles can be checked`] };
+    }
+  }
   const { added, unverifiable } = addedVersions(baseLock, headLock);
   const violations = unverifiable.map((u) => `${u.name}@${u.version}: ${u.reason}`);
   const queue = [...added];

@@ -30,7 +30,12 @@ cp_dir="$(cd "$SCRIPT_DIR/../../control-plane" && pwd)"
 # stopping the bridge alone would leave them running; stop them explicitly on the way out.
 cleanup() {
   trap - INT TERM EXIT
-  kill "${cp_pid:-}" "${worker_pid:-}" "${bridge_pid:-}" "${ui_pid:-}" 2>/dev/null
+  local pids=""
+  for p in "${cp_pid:-}" "${worker_pid:-}" "${bridge_pid:-}" "${ui_pid:-}"; do
+    [ -n "$p" ] && pids="$pids $p"
+  done
+  # shellcheck disable=SC2086  # a list of pids, split on purpose
+  [ -z "$pids" ] || kill $pids 2>/dev/null || true
   node "$bridge_dir/local-servers.mjs" stop
   wait
 }

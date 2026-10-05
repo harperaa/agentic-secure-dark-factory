@@ -152,8 +152,8 @@ export function createLocalServers({ convex, api, secret, machinistHome, workspa
   const stop = (name) => stopServer(dir, name);
 
   function secretsFor(target, checkout) {
-    if (target.secrets !== "doppler") return {}; // other providers keep a local .env.local, which next dev reads
-    const r = spawnSync("doppler", ["secrets", "download", "--no-file", "--format", "json", "--project", target.name, "--config", "dev"], { cwd: checkout, encoding: "utf8" }); // pragma: allowlist secret (a CLI argument, not a value)
+    if (target.secrets !== "doppler") return {}; // other providers keep a local .env.local, which next dev reads -- pragma: allowlist secret
+    const r = spawnSync("doppler", ["secrets", "download", "--no-file", "--format", "json", "--project", target.name, "--config", "dev"], { cwd: checkout, encoding: "utf8" });
     if (r.status !== 0) throw new Error(`doppler: ${toNote(r.stderr || "secrets download failed")}`);
     return JSON.parse(r.stdout);
   }
@@ -214,7 +214,16 @@ export function createLocalServers({ convex, api, secret, machinistHome, workspa
 
     const inflight = installs.get(target.name);
     if (inflight) {
-      if (inflight.exit === undefined) return report("installing", { head: head(checkout) });
+      if (inflight.exit === undefined) {
+        if (target.busy) {
+          // A run took the checkout after the install began; npm must not keep rewriting
+          // node_modules under it. Stop now and install again once the run is done.
+          inflight.child.kill();
+          installs.delete(target.name);
+          return report("stopped", { head: head(checkout), note: "install stopped: a run is using this checkout" });
+        }
+        return report("installing", { head: head(checkout) });
+      }
       installs.delete(target.name);
       if (inflight.exit !== 0) {
         backoff.set(target.name, { until: Date.now() + 5 * 60_000, tries: 0 });

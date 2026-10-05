@@ -9,6 +9,10 @@ import { minimatch } from "minimatch";
  * lockfile against the supply-chain cooldown (every new package version public for 7 days, 14 for
  * a major -- the product template's own policy), the dependency files no longer force gray, by
  * name or by path. A failed or missing check leaves them forced, with the reasons.
+ *
+ * The cooldown vouches only for what it checked: new versions in a changed lockfile. It says
+ * nothing about a package.json edited on its own (scripts, engines, overrides), and a verdict that
+ * checked nothing vouches for nothing, so neither clears anything.
  */
 export type ForcedGrayInput = {
   changedPaths: readonly string[];
@@ -23,12 +27,14 @@ export type ForcedGrayResult = {
   reasons: string[];
 };
 
-const DEPENDENCY_FILES = new Set(["package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock"]);
+const LOCKFILES = new Set(["package-lock.json", "pnpm-lock.yaml", "yarn.lock"]);
+const DEPENDENCY_FILES = new Set(["package.json", ...LOCKFILES]);
 
 export function classifyForcedGray(input: ForcedGrayInput): ForcedGrayResult {
   const reasons: string[] = [];
 
-  const cooled = input.dependencyCooldown?.ok === true;
+  const lockfileChanged = input.changedPaths.some((p) => LOCKFILES.has(p.split("/").pop() ?? p));
+  const cooled = input.dependencyCooldown?.ok === true && input.dependencyCooldown.checked > 0 && lockfileChanged;
   for (const path of input.changedPaths) {
     const dependencyFile = DEPENDENCY_FILES.has(path.split("/").pop() ?? path);
     if (dependencyFile && cooled) {

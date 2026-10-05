@@ -91,9 +91,11 @@ function readEvents(machinistRunId) {
 // phase's PR). Machinist has written it three ways: a `**Pull request:** <url>` line, a
 // `| Pull request | <url> (open...) |` row in the foreman-state comment, and a separate
 // `machinist:foreman-pr` comment. The newest match across those comments wins. Failing all of
-// them, an open PR that GitHub says closes the issue is the next best evidence.
+// them, an open PR that GitHub says closes the issue is the next best evidence; failing that too,
+// the PR the output named counts only if its branch carries the issue number the way the foreman
+// names branches (codex/<issue>-<slug>), because the output also lists the PRs it inventoried.
 const FOREMAN_PR = /(?:\*\*Pull request:\*\*|\|\s*Pull request\s*\||Pull request for this issue:)\s*https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/(\d+)/g;
-function prFromForemanState(ref) {
+function prFromForemanState(ref, candidate) {
   const m = ref?.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/(\d+)$/);
   if (!m) return undefined;
   const r = sh("gh", ["api", `repos/${m[1]}/issues/${m[2]}/comments`, "--paginate", "--jq", '.[] | select(.body | test("machinist:foreman-(state|pr)")) | .body']);
@@ -101,7 +103,12 @@ function prFromForemanState(ref) {
   if (pr) return Number(pr[1]);
   const closing = sh("gh", ["pr", "list", "--repo", m[1], "--state", "open", "--json", "number,closingIssuesReferences", "--jq", `[.[] | select(any(.closingIssuesReferences[]; .number == ${Number(m[2])})) | .number] | max // empty`]);
   const n = closing.ok ? Number(closing.stdout.trim()) : NaN;
-  return Number.isInteger(n) && n > 0 ? n : undefined;
+  if (Number.isInteger(n) && n > 0) return n;
+  if (candidate !== undefined) {
+    const branch = sh("gh", ["pr", "view", String(candidate), "--repo", m[1], "--json", "headRefName", "--jq", ".headRefName"]);
+    if (branch.ok && new RegExp(`(^|[^0-9])${Number(m[2])}([^0-9]|$)`).test(branch.stdout.trim())) return candidate;
+  }
+  return undefined;
 }
 
 // Executors narrate themselves one line at a time: `GENESIS step=clone outcome=passed`, from
@@ -197,9 +204,9 @@ async function reconcileRuns() {
       const parsed = parseOutput(out);
       const resultLine = parsed.resultLine, sha = parsed.sha;
       const run = await convex.query(api.bridge.runById, { secret, runId }).catch(() => null);
-      // A foreman's PR comes only from the issue: its output names every open PR it inventoried,
-      // so the last URL there is a guess, not the hand-off.
-      const pr = run?.command === "foreman" ? prFromForemanState(run.ref) : parsed.pr;
+      // A foreman's PR comes from the issue; its output names every open PR it inventoried, so
+      // the last URL there is only a candidate, accepted when its branch names the issue.
+      const pr = run?.command === "foreman" ? prFromForemanState(run.ref, parsed.pr) : parsed.pr;
       const tokenUsage = mrun ? readTokenUsage(mrun.id) : undefined;
       const state = job.state === "succeeded" ? "succeeded" : job.state === "cancelled" ? "cancelled" : job.state === "timed_out" ? "timed_out" : "failed";
       await convex.mutation(api.bridge.complete, {

@@ -27,8 +27,19 @@ test("a failed cooldown keeps dependency changes forced and says which package",
 });
 
 test("the cooldown does not clear other sensitive paths", () => {
-  const r = classifyForcedGray({ changedPaths: ["package.json", "middleware.ts"], forcedGrayPaths, dependencyCooldown: { ok: true, checked: 1, violations: [] } });
+  const r = classifyForcedGray({ changedPaths: ["package.json", "package-lock.json", "middleware.ts"], forcedGrayPaths, dependencyCooldown: { ok: true, checked: 1, violations: [] } });
   assert.deepEqual(r.reasons, ["path middleware.ts matches middleware.ts"]);
+});
+
+test("a package.json edited without its lockfile stays forced, whatever the cooldown says", () => {
+  const r = classifyForcedGray({ changedPaths: ["package.json"], forcedGrayPaths, dependencyCooldown: { ok: true, checked: 0, violations: [] } });
+  assert.equal(r.forced, true);
+  assert.ok(r.reasons.includes("dependency change in package.json"));
+});
+
+test("a cooldown that checked nothing clears nothing", () => {
+  const r = classifyForcedGray({ changedPaths: ["package.json", "package-lock.json"], forcedGrayPaths, dependencyCooldown: { ok: true, checked: 0, violations: [] } });
+  assert.equal(r.forced, true);
 });
 
 test("ordinary page change does not force gray", () => {

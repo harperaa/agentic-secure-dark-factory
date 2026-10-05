@@ -286,21 +286,20 @@ export const gateSync = mutation({
       ...(reviewSummary ? { summary: reviewSummary.slice(0, 1200) } : {}),
     };
     const patch = { ...(headSha === undefined ? {} : { headSha }), ...(reviewRequestedHead === undefined ? {} : { reviewRequestedHead }), ci, review, updatedAt: now };
+    let changed = true;
     if (existing) {
       const norm = (list: Array<{ name: string; conclusion: string; required?: boolean }> | undefined) =>
         [...(list ?? [])].sort((a, b) => a.name.localeCompare(b.name)).map((c) => `${c.name}:${c.conclusion}:${c.required === true}`).join("|");
-      const changed = JSON.stringify({ ci: norm(existing.ci), s: existing.review?.score, u: existing.review?.unresolvedComments, h: existing.headSha, r: existing.review?.summary }) !== JSON.stringify({ ci: norm(ci), s: reviewScore, u: unresolvedComments, h: headSha ?? existing.headSha, r: reviewSummary ? reviewSummary.slice(0, 1200) : existing.review?.summary });
+      changed = JSON.stringify({ ci: norm(existing.ci), s: existing.review?.score, u: existing.review?.unresolvedComments, h: existing.headSha, r: existing.review?.summary }) !== JSON.stringify({ ci: norm(ci), s: reviewScore, u: unresolvedComments, h: headSha ?? existing.headSha, r: reviewSummary ? reviewSummary.slice(0, 1200) : existing.review?.summary });
       await ctx.db.patch(existing._id, changed ? patch : { updatedAt: existing.updatedAt, ...(reviewRequestedHead === undefined ? {} : { reviewRequestedHead }) });
-      if (changed) {
-        await ctx.scheduler.runAfter(0, internal.gates.evaluate, { projectId });
-      }
     } else {
       const latestRun = await ctx.db.query("runs").withIndex("by_project", (q) => q.eq("projectId", projectId)).order("desc").first();
       await ctx.db.insert("gates", { ...(latestRun ? { runId: latestRun._id } : {}), projectId, pr, verdict: "pending", ...patch });
-      await ctx.scheduler.runAfter(0, internal.gates.evaluate, { projectId });
     }
-    // Record the changed paths, labels, and lockfile cooldown for the forced-gray classifier.
-    await ctx.scheduler.runAfter(0, internal.gates.classify, { projectId, pr, changedPaths, labels, ...(dependencyCooldown ? { dependencyCooldown } : {}) });
+    // Record the changed paths, labels, and lockfile cooldown for the forced-gray classifier, which
+    // then evaluates the gate. Classification first, always: a verdict reached on the previous
+    // head's classification could queue an auto-merge that nothing retracts.
+    await ctx.scheduler.runAfter(0, internal.gates.classify, { projectId, pr, changedPaths, labels, ...(dependencyCooldown ? { dependencyCooldown } : {}), evaluate: changed });
   },
 });
 
