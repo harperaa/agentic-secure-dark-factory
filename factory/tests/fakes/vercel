@@ -9,8 +9,16 @@ case "${1:-}" in
     printf '{"projectId":"prj_fake","orgId":"team_fake"}\n' > .vercel/project.json ;;
   git) exit 0 ;;
   promote) exit 0 ;;
-  whoami) printf 'fakeuser\n' ;;
-  teams) printf 'id      Team name\nfake-team   Fake Team\n' ;;
+  # FAKE_VERCEL_LOGGED_OUT=1: no session. FAKE_VERCEL_TEAMS=marked|many: the table shapes
+  # `vercel teams ls` takes (a current-scope marker; several teams), for doctor.sh.
+  whoami) [ -z "${FAKE_VERCEL_LOGGED_OUT:-}" ] || { printf 'Error: No existing credentials found.\n' >&2; exit 1; }
+    printf 'fakeuser\n' ;;
+  teams)
+    case "${FAKE_VERCEL_TEAMS:-}" in
+      marked) printf 'id      Team name\n✔ fake-team   Fake Team\n' ;;
+      many) printf 'id      Team name\nfake-team   Fake Team\nother-team   Other Team\n' ;;
+      *) printf 'id      Team name\nfake-team   Fake Team\n' ;;
+    esac ;;
   --version) printf '0.0.0-fake\n' ;;
   *) printf 'fake vercel: unhandled %s\n' "$*" >&2; exit 99 ;;
 esac
