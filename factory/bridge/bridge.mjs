@@ -172,9 +172,13 @@ function parseProgress(text) {
   return { step, outcome, done: finished.size, at: Date.now(), ...(note ? { note } : {}) };
 }
 
+// Script stages print their result line at the start of a line. Agent stages stream Claude
+// Code JSON, where the same line sits inside a "text" field with JSON escaping -- which is how
+// four greptile-fix runs reported outcome=needs-human and the control plane saw none of it.
+// Find the line in either place; the last one wins.
+const RESULT_LINE = /(?<![A-Za-z_])((?:RESULT|DEPLOY_RESULT|ASSESS_RESULT|GREPTILE_FIX|TRIAGE) [^\n"\\`]*)/g;
 function parseOutput(text) {
-  const lines = text.split("\n");
-  const resultLine = [...lines].reverse().find((l) => /^(RESULT|DEPLOY_RESULT|ASSESS_RESULT|GREPTILE_FIX|TRIAGE) /.test(l));
+  const resultLine = [...text.matchAll(RESULT_LINE)].pop()?.[1]?.trim();
   const prMatch = text.match(/https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/(\d+)/g);
   const pr = prMatch ? Number(prMatch[prMatch.length - 1].split("/").pop()) : undefined;
   const sha = [...text.matchAll(/\b(?:head|sha)=([0-9a-f]{40})\b/g)].pop()?.[1];
@@ -326,10 +330,17 @@ async function syncGates() {
   lastGateSync = Date.now();
   const targets = await convex.query(api.bridge.reviewTargets, { secret });
   for (const t of targets) {
-    const checks = sh("gh", ["pr", "checks", String(t.pr), "--repo", t.repo, "--json", "name,bucket,link"]);
+    const checks = sh("gh", ["pr", "checks", String(t.pr), "--repo", t.repo, "--json", "name,bucket,link,startedAt"]);
     const req = sh("gh", ["api", `repos/${t.repo}/branches/main/protection/required_status_checks`, "--jq", ".contexts[]"]);
     const required = new Set(req.ok ? req.stdout.split("\n").filter(Boolean) : []);
-    const ci = checks.ok ? JSON.parse(checks.stdout || "[]").map((c) => ({ name: c.name, conclusion: c.bucket === "pass" ? "success" : c.bucket === "fail" ? "failure" : c.bucket === "skipping" ? "skipped" : "pending", required: required.has(c.name), ...(c.link ? { url: c.link } : {}) })) : [];
+    // Every check run on the head is listed, so a workflow triggered by both push and
+    // pull_request reports each job twice. Branch protection judges the newest run per name;
+    // keep that one, or a decision reads "security, security".
+    const newest = new Map();
+    for (const c of checks.ok ? JSON.parse(checks.stdout || "[]") : []) {
+      if (!newest.has(c.name) || String(c.startedAt ?? "") > String(newest.get(c.name).startedAt ?? "")) newest.set(c.name, c);
+    }
+    const ci = [...newest.values()].map((c) => ({ name: c.name, conclusion: c.bucket === "pass" ? "success" : c.bucket === "fail" ? "failure" : c.bucket === "skipping" ? "skipped" : "pending", required: required.has(c.name), ...(c.link ? { url: c.link } : {}) }));
     const view = sh("gh", ["pr", "view", String(t.pr), "--repo", t.repo, "--json", "headRefOid,baseRefName,files,labels"]);
     const v = view.ok ? JSON.parse(view.stdout) : {};
     const cooldown = await dependencyCooldown(t.repo, v);

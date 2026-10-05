@@ -16,7 +16,8 @@ export function describeGate(project: Doc<"projects">, gate: Doc<"gates"> | null
   const detail: string[] = [];
   const evidence: Evidence[] = [{ label: `PR #${project.currentPr}`, url: prUrl }];
 
-  const ci = gate?.ci ?? [];
+  // One entry per check name: older gate rows may hold the same check from two workflow runs.
+  const ci = [...new Map((gate?.ci ?? []).map((c) => [c.name, c])).values()];
   const required = ci.filter((c) => c.required === true);
   const deciding = required.length > 0 ? required : ci;
   const failed = deciding.filter((c) => FAILED.has(c.conclusion));
