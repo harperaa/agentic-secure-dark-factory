@@ -127,7 +127,7 @@ export const evaluate = internalMutation({
     }
 
     // Fail: repair round, or stop once the rounds are spent.
-    const failedChecks = (requiredCi.length > 0 ? requiredCi : allCi).filter((c) => c.conclusion === "failure" || c.conclusion === "timed_out" || c.conclusion === "cancelled").map((c) => c.name);
+    const failedChecks = [...new Set((requiredCi.length > 0 ? requiredCi : allCi).filter((c) => c.conclusion === "failure" || c.conclusion === "timed_out" || c.conclusion === "cancelled").map((c) => c.name))];
     const round = (project.repairRound ?? 0) + 1;
     if (round > project.maxRepairRounds) {
       const { detail, evidence } = describeGate(project, gate, forced ? forcedGray.reasons : []);

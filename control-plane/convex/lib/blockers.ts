@@ -16,7 +16,15 @@ export function describeGate(project: Doc<"projects">, gate: Doc<"gates"> | null
   const detail: string[] = [];
   const evidence: Evidence[] = [{ label: `PR #${project.currentPr}`, url: prUrl }];
 
-  const ci = gate?.ci ?? [];
+  // One entry per check name. Older gate rows may hold the same check from two workflow runs;
+  // keep the worst, because that is the one the gate failed on.
+  const severity = (c: { conclusion: string }) => (FAILED.has(c.conclusion) ? 2 : DONE.has(c.conclusion) ? 0 : 1);
+  const byName = new Map<string, NonNullable<Doc<"gates">["ci"]>[number]>();
+  for (const c of gate?.ci ?? []) {
+    const seen = byName.get(c.name);
+    if (!seen || severity(c) > severity(seen)) byName.set(c.name, c);
+  }
+  const ci = [...byName.values()];
   const required = ci.filter((c) => c.required === true);
   const deciding = required.length > 0 ? required : ci;
   const failed = deciding.filter((c) => FAILED.has(c.conclusion));
