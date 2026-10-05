@@ -120,6 +120,25 @@ export const onRunCompleted = internalMutation({
           ...(result["url"] === undefined ? {} : { devUrl: result["url"] }),
           updatedAt: Date.now(),
         });
+        // Genesis locked main down with the mode in its prompt. A mode change while it was queued
+        // or running had no repository to protect yet; reconcile now against the mode in force.
+        let lockedDownAs: string | undefined;
+        try {
+          lockedDownAs = (JSON.parse(run.prompt) as { mode?: string }).mode;
+        } catch {
+          lockedDownAs = undefined;
+        }
+        const factory = await readFactorySettings(ctx);
+        const current = effectiveMode(factory.mode, project.mode);
+        if (typeof result["repo"] === "string" && lockedDownAs !== undefined && lockedDownAs !== current) {
+          await ctx.db.insert("effects", {
+            projectId: project._id,
+            kind: "protect",
+            args: { repo: result["repo"], name: project.name, mode: current, providers: project.providers },
+            status: "queued",
+            createdAt: Date.now(),
+          });
+        }
         // Register the product with the worker, then create phase issues; the effect chain
         // continues in onEffectDone.
         await ctx.db.insert("effects", {
