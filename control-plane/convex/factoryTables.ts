@@ -149,6 +149,7 @@ export const factoryTables = {
           name: v.string(),
           conclusion: v.string(), // success | failure | neutral | pending | ...
           required: v.optional(v.boolean()), // a required status-check context on main
+          url: v.optional(v.string()), // the check's details page, for the decision's evidence
         }),
       ),
     ),
@@ -159,6 +160,7 @@ export const factoryTables = {
         unresolvedComments: v.number(),
         round: v.number(),
         reviewedAt: v.optional(v.number()),
+        summary: v.optional(v.string()), // the reviewer's own one-paragraph verdict, plain text
       }),
     ),
     assessment: v.optional(
@@ -179,6 +181,9 @@ export const factoryTables = {
     ),
     verdict: v.union(v.literal("pending"), v.literal("pass"), v.literal("fail")),
     reviewRequestedHead: v.optional(v.string()), // head sha a re-review was requested for (bridge, once per head)
+    // Lockfile cooldown (bridge, per head): every new package version public for 7 days, 14 for a
+    // major. When ok, a dependency change no longer forces gray on its own.
+    dependencyCooldown: v.optional(v.object({ ok: v.boolean(), checked: v.number(), violations: v.array(v.string()) })),
     updatedAt: v.number(),
   })
     .index("by_run", ["runId"])
@@ -212,6 +217,9 @@ export const factoryTables = {
       v.literal("dark-mode-checklist"),
     ),
     title: v.string(), // plain language, e.g. "Merge PR #43 into main?"
+    // What is blocking, one plain-language line each, so the operator can decide without opening
+    // the PR: failing checks, the score against the threshold, the reviewer's reason, what is asked.
+    detail: v.optional(v.array(v.string())),
     evidence: v.array(v.object({ label: v.string(), url: v.string() })),
     status: v.union(v.literal("open"), v.literal("resolved")),
     resolvedBy: v.optional(v.string()),
@@ -245,7 +253,7 @@ export const factoryTables = {
   })
     .index("by_status", ["status", "createdAt"])
     .index("by_project", ["projectId", "createdAt"]),
-};
+
   /**
    * One local dev server per built product, run by the bridge on the worker machine so the
    * operator can try the product before (and alongside) the hosted dev deploy. The bridge is the
@@ -273,6 +281,7 @@ export const factoryTables = {
     checkedAt: v.number(),
     note: v.optional(v.string()), // the last error line when it failed
   }).index("by_project", ["projectId"]),
+
   /**
    * Factory-wide settings: a single row, absent until the operator first saves. `mode` is the
    * master switch over every project's own mode; the rest seed new specs.

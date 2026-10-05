@@ -256,14 +256,16 @@ export const gateSync = mutation({
     projectId: v.id("projects"),
     pr: v.number(),
     headSha: v.optional(v.string()),
-    ci: v.array(v.object({ name: v.string(), conclusion: v.string(), required: v.optional(v.boolean()) })),
+    ci: v.array(v.object({ name: v.string(), conclusion: v.string(), required: v.optional(v.boolean()), url: v.optional(v.string()) })),
     reviewScore: v.union(v.number(), v.null()),
+    reviewSummary: v.optional(v.string()),
     unresolvedComments: v.number(),
     changedPaths: v.array(v.string()),
     labels: v.array(v.string()),
     reviewRequestedHead: v.optional(v.string()),
+    dependencyCooldown: v.optional(v.object({ ok: v.boolean(), checked: v.number(), violations: v.array(v.string()) })),
   },
-  handler: async (ctx, { secret, projectId, pr, headSha, ci, reviewScore, unresolvedComments, changedPaths, labels, reviewRequestedHead }) => {
+  handler: async (ctx, { secret, projectId, pr, headSha, ci, reviewScore, reviewSummary, unresolvedComments, changedPaths, labels, reviewRequestedHead, dependencyCooldown }) => {
     requireBridge(secret);
     const project = await ctx.db.get(projectId);
     if (!project) {
@@ -281,12 +283,13 @@ export const gateSync = mutation({
       unresolvedComments,
       round: existing?.review?.round ?? project.repairRound ?? 0,
       reviewedAt: now,
+      ...(reviewSummary ? { summary: reviewSummary.slice(0, 1200) } : {}),
     };
     const patch = { ...(headSha === undefined ? {} : { headSha }), ...(reviewRequestedHead === undefined ? {} : { reviewRequestedHead }), ci, review, updatedAt: now };
     if (existing) {
       const norm = (list: Array<{ name: string; conclusion: string; required?: boolean }> | undefined) =>
         [...(list ?? [])].sort((a, b) => a.name.localeCompare(b.name)).map((c) => `${c.name}:${c.conclusion}:${c.required === true}`).join("|");
-      const changed = JSON.stringify({ ci: norm(existing.ci), s: existing.review?.score, u: existing.review?.unresolvedComments, h: existing.headSha }) !== JSON.stringify({ ci: norm(ci), s: reviewScore, u: unresolvedComments, h: headSha ?? existing.headSha });
+      const changed = JSON.stringify({ ci: norm(existing.ci), s: existing.review?.score, u: existing.review?.unresolvedComments, h: existing.headSha, r: existing.review?.summary }) !== JSON.stringify({ ci: norm(ci), s: reviewScore, u: unresolvedComments, h: headSha ?? existing.headSha, r: reviewSummary ? reviewSummary.slice(0, 1200) : existing.review?.summary });
       await ctx.db.patch(existing._id, changed ? patch : { updatedAt: existing.updatedAt, ...(reviewRequestedHead === undefined ? {} : { reviewRequestedHead }) });
       if (changed) {
         await ctx.scheduler.runAfter(0, internal.gates.evaluate, { projectId });
@@ -296,8 +299,8 @@ export const gateSync = mutation({
       await ctx.db.insert("gates", { ...(latestRun ? { runId: latestRun._id } : {}), projectId, pr, verdict: "pending", ...patch });
       await ctx.scheduler.runAfter(0, internal.gates.evaluate, { projectId });
     }
-    // Record the changed paths and labels for the forced-gray classifier.
-    await ctx.scheduler.runAfter(0, internal.gates.classify, { projectId, pr, changedPaths, labels });
+    // Record the changed paths, labels, and lockfile cooldown for the forced-gray classifier.
+    await ctx.scheduler.runAfter(0, internal.gates.classify, { projectId, pr, changedPaths, labels, ...(dependencyCooldown ? { dependencyCooldown } : {}) });
   },
 });
 
@@ -320,6 +323,7 @@ export const runById = query({
     return run ? { command: run.command, ref: run.ref ?? null, stage: run.stage } : null;
   },
 });
+
 /**
  * Projects the bridge should keep a local dev server running for: every product that genesis
  * has created a repository for. Newest activity first, so a cap on concurrent servers keeps the

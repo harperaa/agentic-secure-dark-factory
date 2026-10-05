@@ -3,11 +3,16 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { classifyForcedGray, mayAutoMerge } from "../factory/policy/forcedGray";
 import { effectiveMode, readFactorySettings } from "./lib/factorySettings";
+import { describeGate } from "./lib/blockers";
 
 /**
  * Review-loop gate (design §4.7, §4.9). Runs after a foreman hand-off and after every reviewer or
  * check-suite webhook. Decides: pass → auto-merge (dark) or decision (gray); fail → repair round
  * or NEEDS_HUMAN at the round cap; pending → re-check later.
+ *
+ * A failing required check is repaired like a low review score, in any mode: gray decides who
+ * merges, not who fixes. The operator is asked only when the repair rounds are spent, or when a
+ * repair run itself reports that it needs a human.
  */
 export const evaluate = internalMutation({
   args: { projectId: v.id("projects") },
@@ -57,13 +62,15 @@ export const evaluate = internalMutation({
     if ((!ciPassed && !ciFailed) || waitingOnReviewer) {
       const waited = now - (gate?.updatedAt ?? project.updatedAt);
       if (waited > 20 * 60_000) {
+        const { detail, evidence } = describeGate(project, gate, forced ? forcedGray.reasons : []);
         await ctx.db.insert("decisions", {
           projectId,
           kind: "unblock",
           title: waitingOnReviewer
             ? `The reviewer has not reviewed PR #${project.currentPr} after 20 minutes. Re-check, or send back to fix.`
             : `CI has not reported on PR #${project.currentPr} after 20 minutes.`,
-          evidence: [{ label: `PR #${project.currentPr}`, url: `https://github.com/${project.repo}/pull/${project.currentPr}` }],
+          detail,
+          evidence,
           status: "open",
           createdAt: now,
         });
@@ -93,10 +100,20 @@ export const evaluate = internalMutation({
         });
         await ctx.db.insert("events", { projectId, at: now, actor: "system", action: "decision.auto-merge", after: { pr: project.currentPr, mode: "dark" } });
       } else {
+        const { detail } = describeGate(project, gate, forced ? forcedGray.reasons : []);
+        // Say why this one waits for a human: the gates passed, so it is mode or policy.
+        if (project.mode === "gray") {
+          detail.unshift("Every gate passed. This project is in gray mode, so merges wait for you.");
+        } else if (factory.mode === "gray") {
+          detail.unshift("Every gate passed. Factory mode is gray, which holds every project for a human merge.");
+        } else {
+          detail.unshift("Every gate passed, but the changes need a human merge (see below).");
+        }
         await ctx.db.insert("decisions", {
           projectId,
           kind: "apply-auto-merge",
           title: `Merge PR #${project.currentPr} into main?`,
+          detail,
           evidence: [
             { label: `PR #${project.currentPr}`, url: `https://github.com/${project.repo}/pull/${project.currentPr}` },
             ...(review ? [{ label: `Reviewer score ${review.score}/5, ${review.unresolvedComments} unresolved`, url: `https://github.com/${project.repo}/pull/${project.currentPr}` }] : []),
@@ -109,22 +126,26 @@ export const evaluate = internalMutation({
       return;
     }
 
-    // Fail: repair round or stop.
+    // Fail: repair round, or stop once the rounds are spent.
+    const failedChecks = (requiredCi.length > 0 ? requiredCi : allCi).filter((c) => c.conclusion === "failure" || c.conclusion === "timed_out" || c.conclusion === "cancelled").map((c) => c.name);
     const round = (project.repairRound ?? 0) + 1;
-    if (round > project.maxRepairRounds || ciFailed) {
+    if (round > project.maxRepairRounds) {
+      const { detail, evidence } = describeGate(project, gate, forced ? forcedGray.reasons : []);
+      detail.push("The factory could not clear this on its own. Fix it on the pull request (or tell the factory what to change), then unblock to re-run the gate.");
       await ctx.db.patch(projectId, { stage: "NEEDS_HUMAN", updatedAt: now });
       await ctx.scheduler.runAfter(0, internal.alerts.notify, {
         title: `${project.name}: stopped`,
-        text: ciFailed ? `CI failed on PR #${project.currentPr}` : `PR #${project.currentPr} did not reach ${project.greptileThreshold}/5 after ${project.maxRepairRounds} rounds`,
+        text: detail.join("\n"),
         url: `https://github.com/${project.repo}/pull/${project.currentPr}`,
       });
       await ctx.db.insert("decisions", {
         projectId,
         kind: "unblock",
         title: ciFailed
-          ? `CI failed on PR #${project.currentPr}. Fix it, then unblock.`
+          ? `PR #${project.currentPr}: ${failedChecks.join(", ")} still failing after ${project.maxRepairRounds} repair rounds.`
           : `PR #${project.currentPr} did not reach ${project.greptileThreshold}/5 after ${project.maxRepairRounds} repair rounds.`,
-        evidence: [{ label: `PR #${project.currentPr}`, url: `https://github.com/${project.repo}/pull/${project.currentPr}` }],
+        detail,
+        evidence,
         status: "open",
         createdAt: now,
       });
@@ -140,7 +161,7 @@ export const evaluate = internalMutation({
       stage: "REVIEW_LOOP",
       command: "greptile-fix",
       repository: project.name,
-      prompt: `--pr=https://github.com/${project.repo}/pull/${project.currentPr} --round=${round} --threshold=${project.greptileThreshold} --bot=${bot}`,
+      prompt: `--pr=https://github.com/${project.repo}/pull/${project.currentPr} --round=${round} --threshold=${project.greptileThreshold} --bot=${bot}${failedChecks.length > 0 ? ` --failed-checks=${failedChecks.join(",")}` : ""}`,
       state: "queued",
       attempt: 1,
       queuedAt: now,
@@ -162,8 +183,14 @@ export const evaluateForRepo = internalMutation({
 
 /** Forced-gray classification from the bridge's observed changed paths and labels. */
 export const classify = internalMutation({
-  args: { projectId: v.id("projects"), pr: v.number(), changedPaths: v.array(v.string()), labels: v.array(v.string()) },
-  handler: async (ctx, { projectId, pr, changedPaths, labels }) => {
+  args: {
+    projectId: v.id("projects"),
+    pr: v.number(),
+    changedPaths: v.array(v.string()),
+    labels: v.array(v.string()),
+    dependencyCooldown: v.optional(v.object({ ok: v.boolean(), checked: v.number(), violations: v.array(v.string()) })),
+  },
+  handler: async (ctx, { projectId, pr, changedPaths, labels, dependencyCooldown }) => {
     const project = await ctx.db.get(projectId);
     if (!project) {
       return;
@@ -176,7 +203,12 @@ export const classify = internalMutation({
     if (!gate) {
       return;
     }
-    const result = classifyForcedGray({ changedPaths, forcedGrayPaths: project.forcedGrayPaths, labels });
-    await ctx.db.patch(gate._id, { forcedGray: result, updatedAt: Date.now() });
+    const result = classifyForcedGray({ changedPaths, forcedGrayPaths: project.forcedGrayPaths, labels, ...(dependencyCooldown ? { dependencyCooldown } : {}) });
+    const before = JSON.stringify(gate.forcedGray ?? null);
+    await ctx.db.patch(gate._id, { forcedGray: result, ...(dependencyCooldown ? { dependencyCooldown } : {}), updatedAt: Date.now() });
+    // A cooldown that clears a dependency change can lift forced gray; let the gate see it now.
+    if (before !== JSON.stringify(result)) {
+      await ctx.scheduler.runAfter(0, internal.gates.evaluate, { projectId });
+    }
   },
 });

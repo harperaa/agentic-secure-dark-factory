@@ -15,6 +15,22 @@ test("dependency change forces gray even when not in the list", () => {
   assert.equal(r.forced, true);
 });
 
+test("a dependency change that cleared the cooldown no longer forces gray, by name or by path", () => {
+  const r = classifyForcedGray({ changedPaths: ["package.json", "package-lock.json", "app/page.tsx"], forcedGrayPaths, dependencyCooldown: { ok: true, checked: 60, violations: [] } });
+  assert.deepEqual(r, { forced: false, reasons: [] });
+});
+
+test("a failed cooldown keeps dependency changes forced and says which package", () => {
+  const r = classifyForcedGray({ changedPaths: ["package-lock.json"], forcedGrayPaths, dependencyCooldown: { ok: false, checked: 3, violations: ["fresh@1.0.0: published 2 day(s) ago; the cooldown is 7"] } });
+  assert.equal(r.forced, true);
+  assert.ok(r.reasons.some((x) => x.includes("fresh@1.0.0")));
+});
+
+test("the cooldown does not clear other sensitive paths", () => {
+  const r = classifyForcedGray({ changedPaths: ["package.json", "middleware.ts"], forcedGrayPaths, dependencyCooldown: { ok: true, checked: 1, violations: [] } });
+  assert.deepEqual(r.reasons, ["path middleware.ts matches middleware.ts"]);
+});
+
 test("ordinary page change does not force gray", () => {
   const r = classifyForcedGray({ changedPaths: ["app/dashboard/page.tsx"], forcedGrayPaths });
   assert.deepEqual(r, { forced: false, reasons: [] });
