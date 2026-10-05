@@ -153,7 +153,7 @@ export function createLocalServers({ convex, api, secret, machinistHome, workspa
 
   function secretsFor(target, checkout) {
     if (target.secrets !== "doppler") return {}; // other providers keep a local .env.local, which next dev reads
-    const r = spawnSync("doppler", ["secrets", "download", "--no-file", "--format", "json", "--project", target.name, "--config", "dev"], { cwd: checkout, encoding: "utf8" });
+    const r = spawnSync("doppler", ["secrets", "download", "--no-file", "--format", "json", "--project", target.name, "--config", "dev"], { cwd: checkout, encoding: "utf8" }); // pragma: allowlist secret (a CLI argument, not a value)
     if (r.status !== 0) throw new Error(`doppler: ${toNote(r.stderr || "secrets download failed")}`);
     return JSON.parse(r.stdout);
   }

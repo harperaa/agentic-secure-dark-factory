@@ -66,7 +66,7 @@ worktree exists. Before editing:
    task data, the acceptance criteria from the linked issue, and the repository conventions
    from `AGENTS.md`.
    - A scanner false positive (for example detect-secrets flagging a label such as
-     `invalid_api_key: "Invalid API Key"`) may be marked with that scanner's documented inline
+     `invalid_api_key: "Invalid API Key"`) may be marked with that scanner's documented inline <!-- pragma: allowlist secret -->
      allowlist comment only after the subagent confirms the flagged value is not a credential.
      Never disable a check, edit workflows to skip it, or widen a baseline to silence it.
    - When the reviewer's reason is about the pull request description (a missing
