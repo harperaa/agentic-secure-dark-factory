@@ -26,6 +26,10 @@ const CONVEX_ALLOWLIST = [
   // Preferred issuer name (Convex/Clerk docs). Same value as Frontend API URL.
   'CLERK_JWT_ISSUER_DOMAIN',
   'ADMIN_EMAIL',
+  // Spec chat drafts a factory-spec from the Convex side, so the key has to be on the
+  // deployment; putting it here instead of `convex env set` keeps a fresh install and prd
+  // from silently missing it. Absent, the action says it is unconfigured rather than failing.
+  'ANTHROPIC_API_KEY',
 ];
 
 function parseArgs(argv) {

@@ -62,7 +62,7 @@ export default function FloorPage() {
                   </Link>
                   <p className="text-[length:var(--text-12)] text-ink-muted">{stageCopy(project)}</p>
                 </div>
-                <Line project={project} reviewScore={gate?.review?.score ?? null} {...(lastRun ? { lastRunStage: lastRun.stage } : {})} compact />
+                <Line project={project} reviewScore={gate?.review?.score ?? null} {...(lastRun ? { lastRunStage: lastRun.stage } : {})} {...(lastRun?.progress && lastRun.state === "running" ? { progress: lastRun.progress } : {})} compact />
                 <div className="text-[length:var(--text-12)] text-ink-muted md:text-right [font-variant-numeric:tabular-nums]">
                   {gate?.review?.score !== undefined && gate.review.score !== null && (
                     <span className="text-ink">review {gate.review.score}/5</span>
