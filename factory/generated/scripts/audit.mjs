@@ -66,14 +66,16 @@ for (const [name, v] of Object.entries(vulns)) {
     const id = ghsa(via);
     if (!allowed.has(id)) continue;
     seen.add(id);
-    // fixAvailable is false, true, or {name, version, isSemVerMajor}. Any fix means the entry is
-    // no longer justified: an advisory is accepted only while nothing can be done about it. A
-    // breaking fix is still a fix; it is the operator's to take or to decline in a renewed entry.
+    // fixAvailable is false, true, or {name, version, isSemVerMajor}. A fix the package itself
+    // publishes, or any non-breaking fix, ends the entry's justification. A "breaking fix" that
+    // names a different package is npm offering to swap the dependent (for braces: downgrade
+    // eslint-config-next to 14), not a patched release of the advisory's package; it is noted,
+    // and the entry's reviewBy date is what forces the operator to look again.
     const fix = v.fixAvailable;
-    if (fix === true) {
-      failures.push(`${id} (${name}) now has a fix: run \`npm audit fix\` and remove it from audit-allowlist.json`);
+    if (fix === true || (fix && (fix.isSemVerMajor === false || fix.name === name))) {
+      failures.push(`${id} (${name}) now has a fix${fix === true ? "" : ` via ${fix.name}@${fix.version}`}: take it and remove the entry from audit-allowlist.json`);
     } else if (fix) {
-      failures.push(`${id} (${name}) now has a fix via ${fix.name}@${fix.version}${fix.isSemVerMajor ? " (a breaking upgrade)" : ""}: take it and remove the entry, or renew the entry with a reason that names this fix`);
+      console.log(`AUDIT step=allowlist outcome=noted id=${id} note=npm offers a breaking change via ${fix.name}@${fix.version}; not a patched ${name}`);
     }
   }
   if (!accepted.has(name)) {
