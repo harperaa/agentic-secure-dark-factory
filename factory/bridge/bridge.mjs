@@ -238,13 +238,30 @@ async function reconcileRuns() {
 }
 
 // --- effects (local credentials) ------------------------------------------------------------
+// The labels the factory applies, as create-phase-issues.sh defines them, for a repository that
+// lacks one.
+const LABELS = {
+  "machinist:auto-merge": { color: "5319e7", description: "The shepherd may verify, update, repair, and merge this pull request" },
+  "machinist:requested": { color: "0e8a16", description: "Ready for the Machinist foreman" },
+  "factory:forced-gray": { color: "b60205", description: "A human must apply machinist:auto-merge" },
+  "factory:security-finding": { color: "d93f0b", description: "Opened from a security assessment finding" },
+};
 async function runEffect(effect) {
   const a = effect.args ?? {};
   try {
     let result;
     switch (effect.kind) {
       case "apply-label": {
-        const r = sh("gh", ["issue", "edit", String(a.number), "--repo", a.repo, "--add-label", a.label]);
+        let r = sh("gh", ["issue", "edit", String(a.number), "--repo", a.repo, "--add-label", a.label]);
+        if (!r.ok && /not found/i.test(r.stderr)) {
+          // Genesis creates the labels a product needs, but a repository made before a label was
+          // added to that list (or by hand) may lack it, and a passing gate must not stall on a
+          // missing tag. Create it with the factory's colour and meaning, then apply again.
+          const meta = LABELS[a.label] ?? { color: "ededed", description: "Applied by the Agentic Secure Dark Factory" };
+          sh("gh", ["label", "create", a.label, "--repo", a.repo, "--color", meta.color, "--description", meta.description]);
+          log("effect", "label-created", `repo=${a.repo} label=${a.label}`);
+          r = sh("gh", ["issue", "edit", String(a.number), "--repo", a.repo, "--add-label", a.label]);
+        }
         if (!r.ok) throw new Error(r.stderr.trim());
         result = { label: a.label };
         break;

@@ -20,6 +20,10 @@ ensure_label() {
 }
 ensure_label "$MACHINIST_REQUEST_LABEL" 0e8a16 "Ready for the Machinist foreman"
 ensure_label "factory:forced-gray" b60205 "A human must apply machinist:auto-merge"
+# The permission label the whole hand-off turns on: the control plane applies it in dark mode,
+# a human in gray, and the shepherd merges nothing without it. calorie-ledger passed its gate
+# and stalled on this label not existing.
+ensure_label "machinist:auto-merge" 5319e7 "The shepherd may verify, update, repair, and merge this pull request"
 ensure_label "factory:security-finding" d93f0b "Opened from a security assessment finding"
 
 count=$(jq '.phases | length' <<<"$SPEC")
