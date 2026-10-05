@@ -175,10 +175,17 @@ function parseProgress(text) {
 // Script stages print their result line at the start of a line. Agent stages stream Claude
 // Code JSON, where the same line sits inside a "text" field with JSON escaping -- which is how
 // four greptile-fix runs reported outcome=needs-human and the control plane saw none of it.
-// Find the line in either place; the last one wins.
-const RESULT_LINE = /(?<![A-Za-z_])((?:RESULT|DEPLOY_RESULT|ASSESS_RESULT|GREPTILE_FIX|TRIAGE) [^\n"\\`]*)/g;
+// Find the line in either place; the last one wins. A plain line is taken whole, quotes and all,
+// since a free-text reason= may contain them; inside JSON the string's own escaping marks the end.
+const PLAIN_RESULT = /^(?:RESULT|DEPLOY_RESULT|ASSESS_RESULT|GREPTILE_FIX|TRIAGE) .*$/gm;
+const EMBEDDED_RESULT = /(?:^|[^A-Za-z_]|\\n)((?:RESULT|DEPLOY_RESULT|ASSESS_RESULT|GREPTILE_FIX|TRIAGE) (?:[^\n"\\`]|\\")*)/gm;
+function resultLineOf(text) {
+  const plain = [...text.matchAll(PLAIN_RESULT)].pop()?.[0];
+  if (plain) return plain.trim();
+  return [...text.matchAll(EMBEDDED_RESULT)].pop()?.[1]?.replace(/\\"/g, '"').trim();
+}
 function parseOutput(text) {
-  const resultLine = [...text.matchAll(RESULT_LINE)].pop()?.[1]?.trim();
+  const resultLine = resultLineOf(text);
   const prMatch = text.match(/https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/(\d+)/g);
   const pr = prMatch ? Number(prMatch[prMatch.length - 1].split("/").pop()) : undefined;
   const sha = [...text.matchAll(/\b(?:head|sha)=([0-9a-f]{40})\b/g)].pop()?.[1];
