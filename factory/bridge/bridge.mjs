@@ -357,6 +357,8 @@ async function dependencyCooldown(repo, view) {
   log("dependency-cooldown", verdict.ok ? "passed" : "failed", `repo=${repo} head=${view.headRefOid.slice(0, 8)} checked=${verdict.checked} violations=${verdict.violations.length}`);
   return verdict;
 }
+const reportedMerged = new Set();
+
 async function syncGates() {
   if (Date.now() - lastGateSync < Number(process.env.BRIDGE_GATE_SYNC_MS ?? 60_000)) return;
   lastGateSync = Date.now();
@@ -373,8 +375,22 @@ async function syncGates() {
       if (!newest.has(c.name) || String(c.startedAt ?? "") > String(newest.get(c.name).startedAt ?? "")) newest.set(c.name, c);
     }
     const ci = [...newest.values()].map((c) => ({ name: c.name, conclusion: c.bucket === "pass" ? "success" : c.bucket === "fail" ? "failure" : c.bucket === "skipping" ? "skipped" : "pending", required: required.has(c.name), ...(c.link ? { url: c.link } : {}) }));
-    const view = sh("gh", ["pr", "view", String(t.pr), "--repo", t.repo, "--json", "headRefOid,baseRefName,files,labels"]);
+    const view = sh("gh", ["pr", "view", String(t.pr), "--repo", t.repo, "--json", "headRefOid,baseRefName,files,labels,state"]);
     const v = view.ok ? JSON.parse(view.stdout) : {};
+    // The design routes merges through a GitHub webhook; a product repository without one (none
+    // registers it yet) left calorie-ledger in REVIEW_LOOP after its PR merged. This poll already
+    // reads the PR, so a merge is reported from here and the webhook becomes the faster path.
+    if (v.state === "MERGED") {
+      // A stopped project keeps its PR in this poll; report each merge once per bridge process
+      // (the control plane also records it only once).
+      const key = `${t.repo}#${t.pr}`;
+      if (!reportedMerged.has(key)) {
+        await convex.mutation(api.bridge.prMerged, { secret, repo: t.repo, pr: t.pr });
+        reportedMerged.add(key);
+        log("gate-sync", "merged", `repo=${t.repo} pr=${t.pr}`);
+      }
+      continue;
+    }
     const cooldown = await dependencyCooldown(t.repo, v);
     const score = sh(path.join(factoryRoot, "factory/scripts/greptile-score.sh"), [t.repo, String(t.pr)]);
     const sc = score.ok ? JSON.parse(score.stdout) : { score: null, comments: [], unresolved: 0, scored_at: null };
