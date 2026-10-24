@@ -357,6 +357,8 @@ async function dependencyCooldown(repo, view) {
   log("dependency-cooldown", verdict.ok ? "passed" : "failed", `repo=${repo} head=${view.headRefOid.slice(0, 8)} checked=${verdict.checked} violations=${verdict.violations.length}`);
   return verdict;
 }
+const reportedMerged = new Set();
+
 async function syncGates() {
   if (Date.now() - lastGateSync < Number(process.env.BRIDGE_GATE_SYNC_MS ?? 60_000)) return;
   lastGateSync = Date.now();
@@ -379,8 +381,14 @@ async function syncGates() {
     // registers it yet) left calorie-ledger in REVIEW_LOOP after its PR merged. This poll already
     // reads the PR, so a merge is reported from here and the webhook becomes the faster path.
     if (v.state === "MERGED") {
-      await convex.mutation(api.bridge.prMerged, { secret, repo: t.repo, pr: t.pr });
-      log("gate-sync", "merged", `repo=${t.repo} pr=${t.pr}`);
+      // A stopped project keeps its PR in this poll; report each merge once per bridge process
+      // (the control plane also records it only once).
+      const key = `${t.repo}#${t.pr}`;
+      if (!reportedMerged.has(key)) {
+        await convex.mutation(api.bridge.prMerged, { secret, repo: t.repo, pr: t.pr });
+        reportedMerged.add(key);
+        log("gate-sync", "merged", `repo=${t.repo} pr=${t.pr}`);
+      }
       continue;
     }
     const cooldown = await dependencyCooldown(t.repo, v);

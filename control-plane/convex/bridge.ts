@@ -3,6 +3,7 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireBridge } from "./lib/factoryAuth";
 import { runStateValidator } from "./factoryTables";
+import { effectDone } from "./stateMachine";
 
 /**
  * Bridge protocol (design §5.0): a small process on the worker machine polls these functions,
@@ -165,7 +166,7 @@ export const effectResult = mutation({
       after: { ok, result: result ?? null, error: error ?? null },
     });
     if (ok) {
-      await ctx.scheduler.runAfter(0, internal.stateMachine.onEffectDone, { effectId });
+      await effectDone(ctx, effectId);
     }
   },
 });
@@ -307,8 +308,8 @@ export const gateSync = mutation({
 export const prMerged = mutation({
   args: { secret: v.string(), repo: v.string(), pr: v.number() },
   handler: async (ctx, { secret, repo, pr }) => {
-    requireBridge(secret);
-    await ctx.scheduler.runAfter(0, internal.stateMachine.onPullRequestMerged, { repo, pr });
+    const actor = requireBridge(secret);
+    await ctx.scheduler.runAfter(0, internal.stateMachine.onPullRequestMerged, { repo, pr, actor });
   },
 });
 

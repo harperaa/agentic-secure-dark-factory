@@ -140,7 +140,7 @@ export const onRunCompleted = internalMutation({
           });
         }
         // Register the product with the worker, then create phase issues; the effect chain
-        // continues in onEffectDone.
+        // continues in effectDone.
         await ctx.db.insert("effects", {
           projectId: project._id,
           kind: "register-repository",
@@ -214,58 +214,72 @@ export const onRunCompleted = internalMutation({
   },
 });
 
-/** Effects the bridge completed that continue the line. */
-export const onEffectDone = internalMutation({
-  args: { effectId: v.id("effects") },
-  handler: async (ctx, { effectId }) => {
-    const effect = await ctx.db.get(effectId);
-    if (!effect) {
-      return;
+/**
+ * Effects the bridge completed that continue the line, in the same transaction that marks the
+ * effect done. This used to run as a scheduled mutation; in the gap between the two, the gate saw
+ * neither a pending label effect nor a queued shepherd and queued a second label.
+ */
+export async function effectDone(ctx: MutationCtx, effectId: Id<"effects">) {
+  const effect = await ctx.db.get(effectId);
+  if (!effect) {
+    return;
+  }
+  const project = await ctx.db.get(effect.projectId);
+  if (!project) {
+    return;
+  }
+  if (effect.kind === "apply-label" && (effect.args as { label?: string }).label === "machinist:auto-merge") {
+    // The permission label is on; the shepherd verifies, updates, repairs, and merges (design §4.9).
+    const max = process.env.SHEPHERD_MAX_ACTIONS ?? "3";
+    await enqueue(ctx, project, "REVIEW_LOOP", "shepherd", `Run the Shepherd queue for ${project.name} with max_actions=${max}. Perform at most ${max} mutating actions in this run.`, project.currentPr !== undefined && project.repo ? `https://github.com/${project.repo}/pull/${project.currentPr}` : undefined);
+    return;
+  }
+  if (effect.kind === "register-repository") {
+    await ctx.db.insert("effects", {
+      projectId: project._id,
+      kind: "create-phase-issues",
+      args: { spec: project.spec },
+      status: "queued",
+      createdAt: Date.now(),
+    });
+    return;
+  }
+  if (effect.kind === "create-phase-issues") {
+    const issues = (effect.result as { issues?: string[] } | undefined)?.issues ?? [];
+    await ctx.db.patch(project._id, { phaseIssues: issues, phaseIndex: 0, updatedAt: Date.now() });
+    const first = issues[0];
+    if (first) {
+      await enqueue(ctx, project, "BUILD", "foreman", `Implement ${first}`, first);
     }
-    const project = await ctx.db.get(effect.projectId);
-    if (!project) {
-      return;
-    }
-    if (effect.kind === "apply-label" && (effect.args as { label?: string }).label === "machinist:auto-merge") {
-      // The permission label is on; the shepherd verifies, updates, repairs, and merges (design §4.9).
-      const max = process.env.SHEPHERD_MAX_ACTIONS ?? "3";
-      await enqueue(ctx, project, "REVIEW_LOOP", "shepherd", `Run the Shepherd queue for ${project.name} with max_actions=${max}. Perform at most ${max} mutating actions in this run.`, project.currentPr !== undefined && project.repo ? `https://github.com/${project.repo}/pull/${project.currentPr}` : undefined);
-      return;
-    }
-    if (effect.kind === "register-repository") {
-      await ctx.db.insert("effects", {
-        projectId: project._id,
-        kind: "create-phase-issues",
-        args: { spec: project.spec },
-        status: "queued",
-        createdAt: Date.now(),
-      });
-      return;
-    }
-    if (effect.kind === "create-phase-issues") {
-      const issues = (effect.result as { issues?: string[] } | undefined)?.issues ?? [];
-      await ctx.db.patch(project._id, { phaseIssues: issues, phaseIndex: 0, updatedAt: Date.now() });
-      const first = issues[0];
-      if (first) {
-        await enqueue(ctx, project, "BUILD", "foreman", `Implement ${first}`, first);
-      }
-    }
-  },
-});
+  }
+}
 
 /** A pull request merged: next phase, or the full assessment after the last one (design §4.3). */
 export const onPullRequestMerged = internalMutation({
-  args: { repo: v.string(), pr: v.number() },
-  handler: async (ctx, { repo, pr }) => {
+  args: { repo: v.string(), pr: v.number(), actor: v.optional(v.string()) },
+  handler: async (ctx, { repo, pr, actor }) => {
     const project = await ctx.db.query("projects").withIndex("by_repo", (q) => q.eq("repo", repo)).unique();
     if (!project || project.currentPr !== pr) {
       return;
     }
     const now = Date.now();
-    await ctx.db.insert("events", { projectId: project._id, at: now, actor: "webhook:github", action: "pr.merged", after: { pr }, evidence: `https://github.com/${repo}/pull/${pr}` });
+    const event = { projectId: project._id, at: now, actor: actor ?? "webhook:github", action: "pr.merged", after: { pr }, evidence: `https://github.com/${repo}/pull/${pr}` };
     if (project.stage !== "REVIEW_LOOP") {
+      // A stopped project keeps its PR, so the bridge's poll reports the merge again every round.
+      // Record it once for the operator; the stop itself is theirs to lift.
+      const last = await ctx.db
+        .query("events")
+        .withIndex("by_project", (q) => q.eq("projectId", project._id))
+        .order("desc")
+        .filter((q) => q.eq(q.field("action"), "pr.merged"))
+        .first();
+      if ((last?.after as { pr?: number } | undefined)?.pr === pr) {
+        return;
+      }
+      await ctx.db.insert("events", event);
       return;
     }
+    await ctx.db.insert("events", event);
     const phases = spec(project).phases;
     const nextIndex = project.phaseIndex + 1;
     const issues = project.phaseIssues ?? [];
