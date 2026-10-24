@@ -109,12 +109,16 @@ jobs:
       - uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1
         with:
           work-dir: sandbox-exec
+          # The action's go-version-input defaults to "stable", which setup-go prefers over the
+          # file and leaves on PATH for every later step; gosec then ran under a toolchain newer
+          # than the one its x/tools could read. Empty it so go.mod decides.
+          go-version-input: ''
           go-version-file: sandbox-exec/go.mod
           cache: false
       - name: gosec
         working-directory: sandbox-exec
         run: |
-          go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.30.0
           "$(go env GOPATH)/bin/gosec" ./...
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
