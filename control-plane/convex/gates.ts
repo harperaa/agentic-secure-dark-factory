@@ -91,6 +91,16 @@ export const evaluate = internalMutation({
       // Factory gray is the master switch: it holds every project to a human merge.
       const factory = await readFactorySettings(ctx);
       if (mayAutoMerge({ mode: effectiveMode(factory.mode, project.mode), forcedGray: { forced, reasons: forcedGray.reasons }, gateVerdict: "pass" })) {
+        // The shepherd run that the label leads to is enqueued only once the bridge has applied
+        // it, so for those seconds the runs guard above sees nothing in flight. Six verdicts in
+        // eleven seconds once queued six labels and six shepherds; one pending label is enough.
+        const pending = await ctx.db
+          .query("effects")
+          .filter((q) => q.and(q.eq(q.field("projectId"), projectId), q.eq(q.field("kind"), "apply-label"), q.or(q.eq(q.field("status"), "queued"), q.eq(q.field("status"), "running"))))
+          .collect();
+        if (pending.some((e) => (e.args as { label?: string }).label === "machinist:auto-merge")) {
+          return;
+        }
         await ctx.db.insert("effects", {
           projectId,
           kind: "apply-label",

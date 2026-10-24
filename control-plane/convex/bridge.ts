@@ -303,6 +303,15 @@ export const gateSync = mutation({
   },
 });
 
+/** The bridge saw a pull request merged (gh pr view state MERGED): the same transition the webhook makes. */
+export const prMerged = mutation({
+  args: { secret: v.string(), repo: v.string(), pr: v.number() },
+  handler: async (ctx, { secret, repo, pr }) => {
+    requireBridge(secret);
+    await ctx.scheduler.runAfter(0, internal.stateMachine.onPullRequestMerged, { repo, pr });
+  },
+});
+
 /** Runs the bridge already submitted (state running); re-tracked after a bridge restart. */
 export const running = query({
   args: { secret: v.string() },
